@@ -1,0 +1,689 @@
+openapi: 3.0.3
+info:
+  title: Quản lý CLB — API
+  description: >
+    API của Telegram Mini App quản lý CLB (điểm danh, chi phí, sao kê).
+    Tham khảo thiết kế tại thiet-ke-mini-app-clb.md.
+  version: 0.1.0
+
+servers:
+  - url: http://localhost:3000
+    description: Local dev
+  - url: https://your-app.vercel.app
+    description: Production (thay bằng NEXT_PUBLIC_APP_URL thật)
+
+tags:
+  - name: auth
+    description: Đăng nhập admin qua Telegram initData
+  - name: telegram
+    description: Webhook nhận sự kiện từ Telegram Bot API
+  - name: cron
+    description: Endpoint scheduler cho cron ngoài (cron-job.org)
+  - name: settings
+    description: Cấu hình chung của CLB
+  - name: sessions
+    description: Buổi tập, điểm danh, chi phí theo buổi
+  - name: item-configs
+    description: Danh mục vật phẩm & đơn giá
+  - name: statements
+    description: Sao kê tháng & duyệt thanh toán
+
+security:
+  - cookieAuth: []
+
+paths:
+  /api/auth/telegram:
+    post:
+      tags: [auth]
+      summary: Đăng nhập admin bằng Telegram WebApp initData
+      description: >
+        Verify initData bằng HMAC-SHA256 (bot token), tìm member tương ứng — chỉ
+        role=admin và status=active mới được cấp session. Set cookie clb_session (JWT, httpOnly).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [initData]
+              properties:
+                initData:
+                  type: string
+                  description: window.Telegram.WebApp.initData lấy từ FE
+      responses:
+        "200":
+          description: Đăng nhập thành công, cookie session đã được set
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  member:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      full_name:
+                        type: string
+                      role:
+                        type: string
+        "400":
+          description: Thiếu initData
+        "401":
+          description: initData không hợp lệ (sai chữ ký hoặc hết hạn)
+        "403":
+          description: telegram_id không thuộc admin đang active
+        "500":
+          description: Server chưa cấu hình TELEGRAM_BOT_TOKEN
+
+  /api/auth/request-admin:
+    post:
+      tags: [auth]
+      summary: Gửi yêu cầu làm admin (dùng khi DB chưa có admin nào)
+      description: >
+        Verify initData bằng HMAC-SHA256 (bot token). Nếu telegram_id chưa có
+        trong bảng member thì tạo mới với role=member, status=active. Không tự
+        gán role=admin — quản trị viên hệ thống phải vào DB nâng role thủ công
+        cho tài khoản này thì mới đăng nhập được vào /api/auth/telegram.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [initData]
+              properties:
+                initData:
+                  type: string
+                  description: window.Telegram.WebApp.initData lấy từ FE
+      responses:
+        "200":
+          description: Đã tạo member (hoặc đã tồn tại từ trước)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  alreadyExists:
+                    type: boolean
+        "400":
+          description: Thiếu initData
+        "401":
+          description: initData không hợp lệ (sai chữ ký hoặc hết hạn)
+        "500":
+          description: Server chưa cấu hình TELEGRAM_BOT_TOKEN
+
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      summary: Đăng xuất — xoá cookie session
+      security: []
+      responses:
+        "200":
+          description: Đã đăng xuất
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/me:
+    get:
+      tags: [auth]
+      summary: Lấy thông tin admin đang đăng nhập
+      responses:
+        "200":
+          description: Thông tin admin
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  full_name:
+                    type: string
+                  username:
+                    type: string
+                  role:
+                    type: string
+        "401":
+          description: Chưa đăng nhập
+
+  /api/telegram/webhook:
+    post:
+      tags: [telegram]
+      summary: Nhận update từ Telegram Bot API
+      description: >
+        Được Telegram gọi (đã cấu hình qua setWebhook). Xử lý message (/start, /getid),
+        poll_answer (ghi Attendance), callback_query (data "paid:<statementId>" → xác nhận thanh toán).
+      security:
+        - telegramSecretToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Telegram Update object (message | poll_answer | callback_query)
+      responses:
+        "200":
+          description: Đã xử lý (luôn trả 200 cho Telegram trừ khi sai secret token)
+        "401":
+          description: Sai X-Telegram-Bot-Api-Secret-Token
+
+  /api/cron/tick:
+    post:
+      tags: [cron]
+      summary: Tick scheduler — được cron ngoài gọi mỗi 1-5 phút
+      description: >
+        Đọc settings + sessions trong DB, tự quyết định việc cần chạy: tạo buổi tập từ
+        weekly_schedule, gửi poll đúng giờ, chốt đủ/thiếu người, nhắc nhập chi phí,
+        chốt sao kê tháng. Idempotent nhờ các field *_sent_at / last_monthly_settlement_run.
+      security:
+        - cronBearer: []
+      responses:
+        "200":
+          description: Đã chạy xong 1 lượt tick
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  ranAt:
+                    type: string
+                    format: date-time
+        "401":
+          description: Sai hoặc thiếu CRON_SECRET
+
+  /api/settings:
+    get:
+      tags: [settings]
+      summary: Lấy cấu hình CLB hiện tại (tự tạo document mặc định nếu chưa có)
+      responses:
+        "200":
+          description: Cấu hình hiện tại
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+        "401":
+          description: Chưa đăng nhập
+    put:
+      tags: [settings]
+      summary: Cập nhật cấu hình CLB
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Settings"
+      responses:
+        "200":
+          description: Cấu hình sau khi cập nhật
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+        "401":
+          description: Chưa đăng nhập
+
+  /api/sessions:
+    get:
+      tags: [sessions]
+      summary: Danh sách buổi tập (mới nhất trước, tối đa 50)
+      responses:
+        "200":
+          description: Danh sách Session
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Session"
+        "401":
+          description: Chưa đăng nhập
+    post:
+      tags: [sessions]
+      summary: Tạo buổi tập mới (thủ công)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [date, start_time, end_time, min_required]
+              properties:
+                date:
+                  type: string
+                  format: date
+                start_time:
+                  type: string
+                  example: "18:30"
+                end_time:
+                  type: string
+                  example: "20:00"
+                min_required:
+                  type: integer
+      responses:
+        "201":
+          description: Buổi tập đã tạo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "400":
+          description: Thiếu thông tin
+        "401":
+          description: Chưa đăng nhập
+
+  /api/sessions/{id}/send-poll:
+    post:
+      tags: [sessions]
+      summary: Gửi poll điểm danh (is_anonymous=false) vào nhóm chính cho buổi tập này
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Session đã được cập nhật poll_id/poll_message_id/poll_sent_at
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "400":
+          description: Chưa cấu hình main_group_chat_id trong Settings
+        "401":
+          description: Chưa đăng nhập
+        "404":
+          description: Không tìm thấy buổi tập
+
+  /api/sessions/{id}/costs:
+    get:
+      tags: [sessions]
+      summary: Xem chi phí đã nhập cho 1 buổi tập + gợi ý chia tiền/người
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Tổng hợp chi phí buổi tập
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  costs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SessionCost"
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ItemConfig"
+                  presentCount:
+                    type: integer
+                  total:
+                    type: number
+                  perPerson:
+                    type: number
+        "401":
+          description: Chưa đăng nhập
+    post:
+      tags: [sessions]
+      summary: Nhập/cập nhật số lượng vật phẩm đã dùng cho buổi tập, tự tính lại chi phí
+      description: Tính total_amount = quantity × unit_price cho từng item, gửi thông báo tổng kết vào nhóm Ban quản trị.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    required: [item_id, quantity]
+                    properties:
+                      item_id:
+                        type: string
+                      quantity:
+                        type: number
+      responses:
+        "200":
+          description: Kết quả tính chi phí
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  total:
+                    type: number
+                  perPerson:
+                    type: number
+                  presentCount:
+                    type: integer
+        "400":
+          description: Payload không hợp lệ
+        "401":
+          description: Chưa đăng nhập
+        "404":
+          description: Không tìm thấy buổi tập
+
+  /api/item-configs:
+    get:
+      tags: [item-configs]
+      summary: Danh mục vật phẩm & đơn giá
+      responses:
+        "200":
+          description: Danh sách ItemConfig
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ItemConfig"
+        "401":
+          description: Chưa đăng nhập
+    post:
+      tags: [item-configs]
+      summary: Thêm vật phẩm mới
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, unit_price, unit]
+              properties:
+                name:
+                  type: string
+                unit_price:
+                  type: number
+                unit:
+                  type: string
+      responses:
+        "201":
+          description: Vật phẩm đã tạo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ItemConfig"
+        "400":
+          description: Thiếu thông tin
+        "401":
+          description: Chưa đăng nhập
+
+  /api/item-configs/{id}:
+    delete:
+      tags: [item-configs]
+      summary: Xoá 1 vật phẩm khỏi danh mục
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Đã xoá
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        "401":
+          description: Chưa đăng nhập
+
+  /api/statements:
+    get:
+      tags: [statements]
+      summary: Danh sách sao kê tháng (kèm tên member, mới nhất trước)
+      responses:
+        "200":
+          description: Danh sách MonthlyStatement
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MonthlyStatement"
+        "401":
+          description: Chưa đăng nhập
+
+  /api/statements/{id}/approve:
+    post:
+      tags: [statements]
+      summary: Admin duyệt một sao kê đã được member báo "đã thanh toán"
+      description: Chuyển status → approved, gửi thông báo xác nhận vào nhóm chính.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Sao kê sau khi duyệt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonthlyStatement"
+        "401":
+          description: Chưa đăng nhập
+        "404":
+          description: Không tìm thấy sao kê
+
+components:
+  parameters:
+    SessionId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: clb_session
+      description: JWT session cookie (httpOnly), cấp sau khi đăng nhập qua /api/auth/telegram.
+    telegramSecretToken:
+      type: apiKey
+      in: header
+      name: X-Telegram-Bot-Api-Secret-Token
+      description: Do Telegram tự gửi lên khi gọi webhook, khớp với TELEGRAM_WEBHOOK_SECRET.
+    cronBearer:
+      type: http
+      scheme: bearer
+      description: "Header Authorization: Bearer <CRON_SECRET>, do cron-job.org gửi lên."
+
+  schemas:
+    Settings:
+      type: object
+      properties:
+        club_name:
+          type: string
+        main_group_chat_id:
+          type: integer
+          description: chat_id nhóm ① (chính)
+        admin_group_chat_id:
+          type: integer
+          description: chat_id nhóm ② (Ban quản trị)
+        weekly_schedule:
+          type: array
+          items:
+            type: object
+            properties:
+              weekday:
+                type: integer
+                minimum: 0
+                maximum: 6
+                description: 0 = Chủ nhật ... 6 = Thứ 7
+              start_time:
+                type: string
+                example: "18:30"
+              end_time:
+                type: string
+                example: "20:00"
+        reminder_hours_before:
+          type: integer
+          description: Gửi poll trước giờ tập bao nhiêu tiếng
+        cost_survey_minutes_after:
+          type: integer
+          description: Nhắc nhập chi phí sau khi kết thúc bao nhiêu phút
+        monthly_settlement_day:
+          type: integer
+          minimum: 1
+          maximum: 28
+        last_monthly_settlement_run:
+          type: string
+          description: "Tháng đã chốt sao kê gần nhất, dạng YYYY-MM (dùng chống chạy trùng)"
+
+    Session:
+      type: object
+      properties:
+        _id:
+          type: string
+        date:
+          type: string
+          format: date-time
+        start_time:
+          type: string
+        end_time:
+          type: string
+        min_required:
+          type: integer
+        status:
+          type: string
+          enum: [scheduled, confirmed_enough, confirmed_shortage, cancelled]
+        poll_message_id:
+          type: integer
+        poll_id:
+          type: string
+        need_recruit:
+          type: boolean
+        recruit_count_needed:
+          type: integer
+        poll_sent_at:
+          type: string
+          format: date-time
+        confirmation_sent_at:
+          type: string
+          format: date-time
+        cost_reminder_sent_at:
+          type: string
+          format: date-time
+
+    Attendance:
+      type: object
+      properties:
+        _id:
+          type: string
+        session_id:
+          type: string
+        member_id:
+          type: string
+        answer:
+          type: string
+          enum: [present, absent, no_response]
+        answered_at:
+          type: string
+          format: date-time
+
+    ItemConfig:
+      type: object
+      properties:
+        _id:
+          type: string
+        name:
+          type: string
+        unit_price:
+          type: number
+        unit:
+          type: string
+
+    SessionCost:
+      type: object
+      properties:
+        _id:
+          type: string
+        session_id:
+          type: string
+        item_id:
+          type: string
+        quantity:
+          type: number
+        total_amount:
+          type: number
+
+    MonthlyStatement:
+      type: object
+      properties:
+        _id:
+          type: string
+        member_id:
+          type: string
+        month:
+          type: string
+          example: "2026-07"
+        total_sessions:
+          type: integer
+        total_amount:
+          type: number
+        status:
+          type: string
+          enum: [pending, paid_reported, approved]
+        paid_reported_at:
+          type: string
+          format: date-time
+        approved_at:
+          type: string
+          format: date-time
+        approved_by:
+          type: string
+
+    Member:
+      type: object
+      properties:
+        _id:
+          type: string
+        telegram_id:
+          type: integer
+        full_name:
+          type: string
+        username:
+          type: string
+        role:
+          type: string
+          enum: [admin, member]
+        status:
+          type: string
+          enum: [active, inactive]
+        statement_chat_id:
+          type: integer
+          description: chat_id nhóm ③ riêng của member này
+        joined_at:
+          type: string
+          format: date-time
