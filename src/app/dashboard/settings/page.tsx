@@ -1,0 +1,244 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+const WEEKDAY_LABEL = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+
+type ScheduleEntry = { weekday: number; start_time: string; end_time: string };
+type Settings = {
+  club_name: string;
+  main_group_chat_id?: number;
+  admin_group_chat_id?: number;
+  weekly_schedule: ScheduleEntry[];
+  reminder_hours_before: number;
+  cost_survey_minutes_after: number;
+  monthly_settlement_day: number;
+};
+
+export default function SettingsPage() {
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  useEffect(() => {
+    fetch("/api/settings")
+      .then((r) => r.json())
+      .then(setSettings);
+  }, []);
+
+  async function handleSave() {
+    if (!settings) return;
+    setSaving(true);
+    await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    });
+    setSaving(false);
+    setSavedAt(Date.now());
+  }
+
+  function addScheduleEntry() {
+    if (!settings) return;
+    setSettings({
+      ...settings,
+      weekly_schedule: [...settings.weekly_schedule, { weekday: 1, start_time: "18:30", end_time: "20:00" }],
+    });
+  }
+
+  function updateScheduleEntry(index: number, entry: Partial<ScheduleEntry>) {
+    if (!settings) return;
+    const next = [...settings.weekly_schedule];
+    next[index] = { ...next[index], ...entry };
+    setSettings({ ...settings, weekly_schedule: next });
+  }
+
+  function removeScheduleEntry(index: number) {
+    if (!settings) return;
+    setSettings({ ...settings, weekly_schedule: settings.weekly_schedule.filter((_, i) => i !== index) });
+  }
+
+  if (!settings) return <p className="text-sm text-zinc-400">Đang tải...</p>;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <section className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4">
+        <h2 className="text-sm font-semibold text-zinc-700">Thông tin chung</h2>
+        <LabeledInput
+          label="Tên CLB"
+          value={settings.club_name}
+          onChange={(v) => setSettings({ ...settings, club_name: v })}
+        />
+        <LabeledInput
+          label="Chat ID nhóm chính (①)"
+          type="number"
+          value={settings.main_group_chat_id ?? ""}
+          onChange={(v) => setSettings({ ...settings, main_group_chat_id: Number(v) })}
+        />
+        <LabeledInput
+          label="Chat ID nhóm Ban quản trị (②)"
+          type="number"
+          value={settings.admin_group_chat_id ?? ""}
+          onChange={(v) => setSettings({ ...settings, admin_group_chat_id: Number(v) })}
+        />
+        <p className="text-xs text-zinc-400">
+          Mẹo: thêm bot vào nhóm rồi gõ lệnh <code>/getid</code> trong nhóm đó để lấy Chat ID.
+        </p>
+      </section>
+
+      <section className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4">
+        <h2 className="text-sm font-semibold text-zinc-700">Lịch tập hàng tuần</h2>
+        {settings.weekly_schedule.map((entry, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <select
+              value={entry.weekday}
+              onChange={(e) => updateScheduleEntry(i, { weekday: Number(e.target.value) })}
+              className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
+            >
+              {WEEKDAY_LABEL.map((label, wd) => (
+                <option key={wd} value={wd}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            <input
+              type="time"
+              value={entry.start_time}
+              onChange={(e) => updateScheduleEntry(i, { start_time: e.target.value })}
+              className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
+            />
+            <input
+              type="time"
+              value={entry.end_time}
+              onChange={(e) => updateScheduleEntry(i, { end_time: e.target.value })}
+              className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
+            />
+            <button onClick={() => removeScheduleEntry(i)} className="text-xs text-red-500">
+              Xoá
+            </button>
+          </div>
+        ))}
+        <button onClick={addScheduleEntry} className="self-start text-xs font-medium text-zinc-600 underline">
+          + Thêm lịch tập
+        </button>
+        <p className="text-xs text-zinc-400">
+          Cron sẽ tự tạo buổi tập & gửi poll dựa theo lịch này (khi đã bật cron ngoài, xem README).
+        </p>
+      </section>
+
+      <section className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4">
+        <h2 className="text-sm font-semibold text-zinc-700">Mốc thời gian tự động</h2>
+        <LabeledInput
+          label="Gửi poll trước giờ tập bao nhiêu tiếng"
+          type="number"
+          value={settings.reminder_hours_before}
+          onChange={(v) => setSettings({ ...settings, reminder_hours_before: Number(v) })}
+        />
+        <LabeledInput
+          label="Nhắc nhập chi phí sau khi kết thúc bao nhiêu phút"
+          type="number"
+          value={settings.cost_survey_minutes_after}
+          onChange={(v) => setSettings({ ...settings, cost_survey_minutes_after: Number(v) })}
+        />
+        <LabeledInput
+          label="Ngày chốt sao kê hàng tháng (1-28)"
+          type="number"
+          value={settings.monthly_settlement_day}
+          onChange={(v) => setSettings({ ...settings, monthly_settlement_day: Number(v) })}
+        />
+      </section>
+
+      <button
+        onClick={handleSave}
+        disabled={saving}
+        className="rounded bg-zinc-900 py-2 text-sm font-medium text-white disabled:opacity-40"
+      >
+        {saving ? "Đang lưu..." : savedAt ? "Đã lưu ✓" : "Lưu cấu hình"}
+      </button>
+
+      <ItemConfigsSection />
+    </div>
+  );
+}
+
+function LabeledInput({
+  label,
+  value,
+  onChange,
+  type = "text",
+}: {
+  label: string;
+  value: string | number;
+  onChange: (v: string) => void;
+  type?: string;
+}) {
+  return (
+    <label className="flex flex-col gap-1 text-sm">
+      <span className="text-zinc-600">{label}</span>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded border border-zinc-300 px-2 py-1.5"
+      />
+    </label>
+  );
+}
+
+type ItemConfig = { _id: string; name: string; unit: string; unit_price: number };
+
+function ItemConfigsSection() {
+  const [items, setItems] = useState<ItemConfig[] | null>(null);
+  const [form, setForm] = useState({ name: "", unit: "", unit_price: 0 });
+
+  function load() {
+    fetch("/api/item-configs")
+      .then((r) => r.json())
+      .then(setItems);
+  }
+
+  useEffect(load, []);
+
+  async function handleAdd(e: React.FormEvent) {
+    e.preventDefault();
+    await fetch("/api/item-configs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    });
+    setForm({ name: "", unit: "", unit_price: 0 });
+    load();
+  }
+
+  async function handleDelete(id: string) {
+    await fetch(`/api/item-configs/${id}`, { method: "DELETE" });
+    load();
+  }
+
+  return (
+    <section className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4">
+      <h2 className="text-sm font-semibold text-zinc-700">Danh mục vật phẩm & đơn giá</h2>
+      {items?.map((item) => (
+        <div key={item._id} className="flex items-center justify-between text-sm">
+          <span>
+            {item.name} — {item.unit_price.toLocaleString("vi-VN")}đ/{item.unit}
+          </span>
+          <button onClick={() => handleDelete(item._id)} className="text-xs text-red-500">
+            Xoá
+          </button>
+        </div>
+      ))}
+      <form onSubmit={handleAdd} className="flex flex-wrap items-end gap-2">
+        <LabeledInput label="Tên vật phẩm" value={form.name} onChange={(v) => setForm({ ...form, name: v })} />
+        <LabeledInput label="Đơn vị" value={form.unit} onChange={(v) => setForm({ ...form, unit: v })} />
+        <LabeledInput
+          label="Đơn giá"
+          type="number"
+          value={form.unit_price}
+          onChange={(v) => setForm({ ...form, unit_price: Number(v) })}
+        />
+        <button className="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium">Thêm</button>
+      </form>
+    </section>
+  );
+}
