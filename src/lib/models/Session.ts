@@ -15,6 +15,7 @@ const SessionSchema = new Schema(
     poll_id: { type: String, index: true }, // id của poll Telegram, dùng để map poll_answer về đúng buổi tập
     need_recruit: { type: Boolean, default: false },
     recruit_count_needed: { type: Number, default: 0 },
+    notes: { type: String },
     // Đánh dấu các mốc cron đã chạy để tránh trigger trùng — xem mục 6 thiết kế
     poll_sent_at: { type: Date },
     confirmation_sent_at: { type: Date },

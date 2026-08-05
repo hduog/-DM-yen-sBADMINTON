@@ -15,6 +15,8 @@ servers:
 tags:
   - name: auth
     description: Đăng nhập admin qua Telegram initData
+  - name: members
+    description: Quản lý thành viên CLB
   - name: telegram
     description: Webhook nhận sự kiện từ Telegram Bot API
   - name: cron
@@ -83,15 +85,17 @@ paths:
         "500":
           description: Server chưa cấu hình TELEGRAM_BOT_TOKEN
 
-  /api/auth/request-admin:
+  /api/auth/join:
     post:
       tags: [auth]
-      summary: Gửi yêu cầu làm admin (dùng khi DB chưa có admin nào)
+      summary: Tham gia với tư cách thành viên / gửi yêu cầu làm admin
       description: >
-        Verify initData bằng HMAC-SHA256 (bot token). Nếu telegram_id chưa có
-        trong bảng member thì tạo mới với role=member, status=active. Không tự
-        gán role=admin — quản trị viên hệ thống phải vào DB nâng role thủ công
-        cho tài khoản này thì mới đăng nhập được vào /api/auth/telegram.
+        Dùng chung cho 2 nút ở màn hình đăng nhập khi bị chặn ("Tham gia với tư
+        cách thành viên" và "Gửi yêu cầu làm admin"). Verify initData bằng
+        HMAC-SHA256 (bot token). Nếu telegram_id chưa có trong bảng member thì
+        tạo mới với role=member, status=active. Không tự gán role=admin — quản
+        trị viên hệ thống phải vào DB nâng role thủ công cho tài khoản này thì
+        mới đăng nhập được vào /api/auth/telegram.
       security: []
       requestBody:
         required: true
@@ -162,6 +166,147 @@ paths:
         "401":
           description: Chưa đăng nhập
 
+  /api/members:
+    get:
+      tags: [members]
+      summary: Danh sách thành viên (đã ẩn các thành viên bị hủy)
+      responses:
+        "200":
+          description: Danh sách member
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Member"
+        "401":
+          description: Chưa đăng nhập
+
+  /api/members/{id}:
+    get:
+      tags: [members]
+      summary: Chi tiết 1 thành viên — thông tin cơ bản, số buổi tập theo tháng lọc, sao kê từng tháng
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: month
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 12
+          description: Tháng cần xem số buổi tham gia (1-12). Mặc định tháng hiện tại (giờ VN).
+        - name: year
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: Năm cần xem, đi kèm `month`. Mặc định năm hiện tại (giờ VN).
+      responses:
+        "200":
+          description: Chi tiết thành viên
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  member:
+                    $ref: "#/components/schemas/Member"
+                  monthKey:
+                    type: string
+                    description: "Tháng đang lọc, dạng YYYY-MM"
+                  sessionsAttended:
+                    type: integer
+                    description: Số buổi tham gia (answer=present) trong monthKey
+                  statements:
+                    type: array
+                    description: Toàn bộ sao kê của thành viên, mọi tháng, mới nhất trước
+                    items:
+                      type: object
+                      properties:
+                        _id:
+                          type: string
+                        month:
+                          type: string
+                        total_sessions:
+                          type: integer
+                        total_amount:
+                          type: integer
+                        status:
+                          type: string
+                          enum: [pending, paid_reported, approved]
+        "401":
+          description: Chưa đăng nhập
+        "404":
+          description: Không tìm thấy thành viên
+    patch:
+      tags: [members]
+      summary: Sửa thông tin thành viên (hiện chỉ hỗ trợ group chat riêng)
+      description: >
+        Set/xoá `statement_chat_id` — group chat riêng của thành viên (admin + member này)
+        dùng để tự động gửi noti sao kê hàng tháng. Truyền `null` để xoá.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                statement_chat_id:
+                  type: integer
+                  nullable: true
+      responses:
+        "200":
+          description: Member đã cập nhật
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Member"
+        "400":
+          description: Payload không hợp lệ
+        "401":
+          description: Chưa đăng nhập
+        "404":
+          description: Không tìm thấy thành viên
+    delete:
+      tags: [members]
+      summary: Hủy thành viên (soft delete — set del_flag=true, status=inactive)
+      description: >
+        Không xoá dữ liệu, chỉ ẩn khỏi danh sách và thu hồi quyền truy cập (kể cả
+        nếu là admin). Không cho phép admin tự hủy chính mình.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Đã hủy thành viên
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        "400":
+          description: Không thể tự hủy chính mình
+        "401":
+          description: Chưa đăng nhập
+        "404":
+          description: Không tìm thấy thành viên
+
   /api/telegram/webhook:
     post:
       tags: [telegram]
@@ -189,9 +334,10 @@ paths:
       tags: [cron]
       summary: Tick scheduler — được cron ngoài gọi mỗi 1-5 phút
       description: >
-        Đọc settings + sessions trong DB, tự quyết định việc cần chạy: tạo buổi tập từ
-        weekly_schedule, gửi poll đúng giờ, chốt đủ/thiếu người, nhắc nhập chi phí,
-        chốt sao kê tháng. Idempotent nhờ các field *_sent_at / last_monthly_settlement_run.
+        Đọc settings + sessions trong DB, tự quyết định việc cần chạy: chốt thiếu người ở mốc
+        T-5h, nhắc nhập chi phí, chốt sao kê tháng. Idempotent nhờ các field *_sent_at /
+        last_monthly_settlement_run. Việc tạo buổi tập + gửi poll điểm danh không còn nằm ở đây —
+        xem /api/cron/attendance/{entryId}.
       security:
         - cronBearer: []
       responses:
@@ -209,6 +355,43 @@ paths:
                     format: date-time
         "401":
           description: Sai hoặc thiếu CRON_SECRET
+
+  /api/cron/attendance/{entryId}:
+    post:
+      tags: [cron]
+      summary: Job điểm danh của 1 lịch tập — được job cron-job.org riêng của mục đó gọi
+      description: >
+        Mỗi mục weekly_schedule có 1 job cron-job.org riêng (tự tạo/cập nhật/xoá khi lưu
+        /api/settings, xem cronjob_id), kích hoạt đúng mốc "trước giờ tập N tiếng"
+        (reminder_hours_before). Khi gọi: tạo Session của lần diễn ra kế tiếp nếu chưa có, rồi gửi
+        poll điểm danh vào main_group_chat_id. Idempotent qua poll_sent_at.
+      parameters:
+        - name: entryId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: _id của mục trong settings.weekly_schedule
+      security:
+        - cronBearer: []
+      responses:
+        "200":
+          description: Đã đảm bảo Session tồn tại và đã gửi (hoặc đã từng gửi) poll
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  sessionId:
+                    type: string
+                  pollSent:
+                    type: boolean
+        "401":
+          description: Sai hoặc thiếu CRON_SECRET
+        "404":
+          description: Không tìm thấy entryId trong weekly_schedule (job cũ, đã bị xoá)
 
   /api/settings:
     get:
@@ -471,6 +654,66 @@ paths:
         "401":
           description: Chưa đăng nhập
 
+  /api/statements/{id}:
+    patch:
+      tags: [statements]
+      summary: Admin chỉnh tay 1 sao kê (VD tính sai chi phí)
+      description: Sửa total_sessions, total_amount và/hoặc status. Dùng từ trang chi tiết thành viên.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                total_sessions:
+                  type: integer
+                total_amount:
+                  type: integer
+                status:
+                  type: string
+                  enum: [pending, paid_reported, approved]
+      responses:
+        "200":
+          description: Sao kê sau khi sửa
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonthlyStatement"
+        "400":
+          description: Payload không hợp lệ
+        "401":
+          description: Chưa đăng nhập
+        "404":
+          description: Không tìm thấy sao kê
+    delete:
+      tags: [statements]
+      summary: Xoá 1 sao kê
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Đã xoá
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        "401":
+          description: Chưa đăng nhập
+
   /api/statements/{id}/approve:
     post:
       tags: [statements]
@@ -536,6 +779,9 @@ components:
           items:
             type: object
             properties:
+              _id:
+                type: string
+                description: Định danh entry — dùng làm {entryId} của /api/cron/attendance/{entryId}
               weekday:
                 type: integer
                 minimum: 0
@@ -547,6 +793,17 @@ components:
               end_time:
                 type: string
                 example: "20:00"
+              cronjob_id:
+                type: integer
+                description: id job tương ứng trên cron-job.org (tự quản lý khi lưu settings)
+        required_participants:
+          type: integer
+          description: >
+            Số người tham gia kỳ vọng mỗi buổi — làm min_required mặc định cho buổi tự tạo và mốc
+            so sánh "đủ/thiếu người"
+        fixed_cost_per_session:
+          type: integer
+          description: Chi phí cố định phát sinh mỗi buổi (thuê sân, ...), cộng vào chi phí vật phẩm khi tính sao kê
         reminder_hours_before:
           type: integer
           description: Gửi poll trước giờ tập bao nhiêu tiếng
@@ -681,6 +938,9 @@ components:
         status:
           type: string
           enum: [active, inactive]
+        del_flag:
+          type: boolean
+          description: true nếu admin đã hủy thành viên này (soft delete)
         statement_chat_id:
           type: integer
           description: chat_id nhóm ③ riêng của member này

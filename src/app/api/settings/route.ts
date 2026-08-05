@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import { getSettings } from "@/lib/models/Settings";
 import { requireAdmin } from "@/lib/auth-guard";
+import { syncAttendanceCronJobs } from "@/lib/cron-sync";
+import { runAttendanceJobIfDue } from "@/lib/session-actions";
 
 export async function GET() {
   const admin = await requireAdmin();
@@ -22,11 +24,22 @@ export async function PUT(request: NextRequest) {
   await connectDB();
   const settings = await getSettings();
 
+  // Snapshot trước khi ghi đè weekly_schedule — cần để biết mục nào bị xoá (và cronjob_id của nó)
+  // nhằm xoá đúng job tương ứng trên cron-job.org sau khi lưu.
+  const oldEntries: { id: string; cronjob_id?: number }[] = settings.weekly_schedule.map(
+    (e: { _id: { toString(): string }; cronjob_id?: number }) => ({
+      id: e._id.toString(),
+      cronjob_id: e.cronjob_id,
+    })
+  );
+
   const editableFields = [
     "club_name",
     "main_group_chat_id",
     "admin_group_chat_id",
     "weekly_schedule",
+    "required_participants",
+    "fixed_cost_per_session",
     "reminder_hours_before",
     "cost_survey_minutes_after",
     "monthly_settlement_day",
@@ -40,5 +53,20 @@ export async function PUT(request: NextRequest) {
   }
 
   await settings.save();
-  return NextResponse.json(settings);
+
+  const newIds = new Set(
+    settings.weekly_schedule.map((e: { _id: { toString(): string } }) => e._id.toString())
+  );
+  const removedEntries = oldEntries.filter((e) => !newIds.has(e.id));
+  const { warnings } = await syncAttendanceCronJobs(settings, removedEntries);
+
+  for (const entry of settings.weekly_schedule) {
+    try {
+      await runAttendanceJobIfDue(entry, settings);
+    } catch (err) {
+      warnings.push(`Lỗi chạy bù job điểm danh cho lịch ${entry.start_time}: ${(err as Error).message}`);
+    }
+  }
+
+  return NextResponse.json({ ...settings.toObject(), warnings });
 }

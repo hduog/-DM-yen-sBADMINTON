@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
   await connectDB();
   const member = await Member.findOne({ telegram_id: verified.user.id });
 
-  if (!member || member.role !== "admin" || member.status !== "active") {
+  if (!member || member.role !== "admin" || member.status !== "active" || member.del_flag) {
     return NextResponse.json(
       { error: "Bạn không có quyền truy cập Mini App này" },
       { status: 403 }

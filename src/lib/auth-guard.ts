@@ -12,7 +12,7 @@ export async function requireAdmin() {
 
   await connectDB();
   const member = await Member.findById(session.memberId);
-  if (!member || member.role !== "admin" || member.status !== "active") return null;
+  if (!member || member.role !== "admin" || member.status !== "active" || member.del_flag) return null;
 
   return member;
 }

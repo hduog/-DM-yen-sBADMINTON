@@ -1,8 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import { Attendance, Member, MonthlyStatement, Session } from "@/lib/models";
+import type { SessionDoc } from "@/lib/models/Session";
 import { answerCallbackQuery, sendMessage } from "@/lib/telegram";
 import { getSettings } from "@/lib/models/Settings";
+import { formatVNDate } from "@/lib/session-actions";
+import type { HydratedDocument } from "mongoose";
 
 type TelegramUpdate = {
   message?: {
@@ -83,6 +86,30 @@ async function handlePollAnswer(pollAnswer: NonNullable<TelegramUpdate["poll_ans
     { answer, answered_at: new Date() },
     { upsert: true }
   );
+
+  if (answer === "present" && session.status === "scheduled") {
+    await checkAndAnnounceQuota(session);
+  }
+}
+
+// Chốt đủ người ngay khi vote "Có" vừa chạm mốc min_required, thay vì đợi mốc T-5h
+// (reconcileDueAttendance chỉ còn lo nhánh thiếu người — xem src/lib/session-actions.ts).
+async function checkAndAnnounceQuota(session: HydratedDocument<SessionDoc>) {
+  const presentCount = await Attendance.countDocuments({
+    session_id: session._id,
+    answer: "present",
+  });
+  if (presentCount < session.min_required) return;
+
+  session.status = "confirmed_enough";
+  session.confirmation_sent_at = new Date();
+  await session.save();
+
+  const settings = await getSettings();
+  const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
+  const text = `✅ Buổi tập ${dateLabel} đã đủ người (${presentCount}/${session.min_required}).`;
+  if (settings.main_group_chat_id) await sendMessage(settings.main_group_chat_id, text);
+  if (settings.admin_group_chat_id) await sendMessage(settings.admin_group_chat_id, text);
 }
 
 async function handleCallbackQuery(

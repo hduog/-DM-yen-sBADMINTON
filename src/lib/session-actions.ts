@@ -21,7 +21,7 @@ export function combineVNDateTime(date: Date, hhmm: string): Date {
   return new Date(Date.UTC(y, mo, d, h, m) - VN_OFFSET_MS);
 }
 
-function formatVNDate(date: Date) {
+export function formatVNDate(date: Date) {
   return date.toLocaleDateString("vi-VN", {
     weekday: "long",
     day: "2-digit",
@@ -45,33 +45,73 @@ type SessionDocT = HydratedDocument<{
   recruit_count_needed?: number;
 }>;
 
-// Tự tạo Session cho các buổi trong 7 ngày tới dựa theo settings.weekly_schedule — idempotent.
-export async function ensureUpcomingSessions(settings: SettingsDocT) {
-  if (!settings.weekly_schedule?.length) return;
+type WeeklyScheduleEntryT = { weekday: number; start_time: string; end_time: string };
 
+// Tạo (nếu chưa có) Session cho lần diễn ra kế tiếp của 1 mục weekly_schedule — idempotent qua
+// findOne({date, start_time}). Được gọi từ /api/cron/attendance/[entryId] khi job cron-job.org
+// tương ứng kích hoạt (xem cron-sync.ts) — thay cho ensureUpcomingSessions cũ chạy theo tick.
+export async function ensureSessionForScheduleEntry(
+  entry: WeeklyScheduleEntryT,
+  settings: SettingsDocT
+): Promise<SessionDocT> {
   const today = vnNow();
   const todayWeekday = today.getUTCDay();
+  const daysUntil = (entry.weekday - todayWeekday + 7) % 7;
+  const targetDate = new Date(
+    Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + daysUntil)
+  );
 
-  for (const entry of settings.weekly_schedule) {
-    const daysUntil = (entry.weekday - todayWeekday + 7) % 7;
-    const targetDate = new Date(
-      Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + daysUntil)
-    );
+  const existing = await Session.findOne({ date: targetDate, start_time: entry.start_time });
+  if (existing) return existing;
 
-    const exists = await Session.findOne({
-      date: targetDate,
-      start_time: entry.start_time,
-    });
-    if (exists) continue;
+  return Session.create({
+    date: targetDate,
+    start_time: entry.start_time,
+    end_time: entry.end_time,
+    min_required: settings.required_participants ?? 1,
+    status: "scheduled",
+  });
+}
 
-    await Session.create({
-      date: targetDate,
-      start_time: entry.start_time,
-      end_time: entry.end_time,
-      min_required: 1,
-      status: "scheduled",
-    });
+// Nếu mốc "trước giờ tập N tiếng" của lần diễn ra kế tiếp đã trôi qua ngay tại thời điểm lưu
+// cấu hình (VD: thêm/sửa lịch tập sau khi mốc kích hoạt trong tuần này đã qua), gửi poll ngay tại
+// đây thay vì đợi cron-job.org kích hoạt lần kế (tuần sau) — tránh bỏ lỡ buổi tập gần nhất.
+// Idempotent qua poll_sent_at, được gọi từ /api/settings sau mỗi lần lưu (xem session-actions.ts).
+export async function runAttendanceJobIfDue(entry: WeeklyScheduleEntryT, settings: SettingsDocT) {
+  const session = await ensureSessionForScheduleEntry(entry, settings);
+  if (session.poll_sent_at) return session;
+
+  const startAt = combineVNDateTime(session.date, session.start_time);
+  const triggerAt = new Date(startAt.getTime() - settings.reminder_hours_before * 60 * 60 * 1000);
+  if (new Date() >= triggerAt) {
+    await sendPollForSession(session, settings);
   }
+  return session;
+}
+
+// Ghép danh sách thành viên đang active với vote của họ trong 1 buổi tập — thành viên chưa vote
+// không có document Attendance nên mặc định "no_response". Dùng chung cho API xem chi tiết
+// điểm danh và API nhắc điểm danh.
+export async function getSessionAttendanceDetail(sessionId: string) {
+  const [members, attendances] = await Promise.all([
+    Member.find({ status: "active", del_flag: false }).sort({ full_name: 1 }),
+    Attendance.find({ session_id: sessionId }),
+  ]);
+
+  const answerByMember = new Map(attendances.map((a) => [a.member_id.toString(), a.answer]));
+  const list = members.map((m) => ({
+    member_id: m._id.toString(),
+    full_name: m.full_name,
+    username: m.username,
+    answer: answerByMember.get(m._id.toString()) ?? "no_response",
+  }));
+
+  return {
+    list,
+    presentCount: list.filter((x) => x.answer === "present").length,
+    absentCount: list.filter((x) => x.answer === "absent").length,
+    noResponseCount: list.filter((x) => x.answer === "no_response").length,
+  };
 }
 
 export async function sendPollForSession(session: SessionDocT, settings: SettingsDocT) {
@@ -86,26 +126,11 @@ export async function sendPollForSession(session: SessionDocT, settings: Setting
   await session.save();
 }
 
-// Gửi poll cho các buổi đã tới mốc "trước giờ tập N tiếng" (settings.reminder_hours_before) mà chưa gửi.
-export async function sendDuePolls(settings: SettingsDocT) {
-  const now = new Date();
-  const sessions = await Session.find({
-    status: "scheduled",
-    poll_sent_at: { $exists: false },
-  });
-
-  for (const session of sessions) {
-    const startAt = combineVNDateTime(session.date, session.start_time);
-    const dueAt = new Date(startAt.getTime() - settings.reminder_hours_before * 60 * 60 * 1000);
-    if (now >= dueAt) {
-      await sendPollForSession(session, settings);
-    }
-  }
-}
-
 const CONFIRM_HOURS_BEFORE = 5;
 
-// Chốt đủ/thiếu người ở mốc T-5h trước giờ tập — xem mục 5.1 bước 4.
+// Chốt "thiếu người" ở mốc T-5h trước giờ tập cho các buổi vẫn còn "scheduled" (chưa đủ vote
+// "Có" — nếu đủ rồi thì handlePollAnswer đã chốt confirmed_enough ngay lúc vote, xem
+// src/app/api/telegram/webhook/route.ts). Không còn xử lý nhánh "enough" ở đây nữa.
 export async function reconcileDueAttendance(settings: SettingsDocT) {
   const now = new Date();
   const sessions = await Session.find({
@@ -123,22 +148,15 @@ export async function reconcileDueAttendance(settings: SettingsDocT) {
       session_id: session._id,
       answer: "present",
     });
-    const enough = presentCount >= session.min_required;
 
-    session.status = enough ? "confirmed_enough" : "confirmed_shortage";
+    session.status = "confirmed_shortage";
     session.confirmation_sent_at = now;
-    if (!enough) {
-      session.need_recruit = true;
-      session.recruit_count_needed = Math.max(session.min_required - presentCount, 0);
-    }
+    session.need_recruit = true;
+    session.recruit_count_needed = Math.max(session.min_required - presentCount, 0);
     await session.save();
 
-    const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
-    if (enough) {
-      const text = `✅ Buổi tập ${dateLabel} đã đủ người (${presentCount}/${session.min_required}).`;
-      if (settings.main_group_chat_id) await sendMessage(settings.main_group_chat_id, text);
-      if (settings.admin_group_chat_id) await sendMessage(settings.admin_group_chat_id, text);
-    } else if (settings.admin_group_chat_id) {
+    if (settings.admin_group_chat_id) {
+      const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
       await sendMessage(
         settings.admin_group_chat_id,
         `⚠️ Buổi tập ${dateLabel} đang thiếu người (${presentCount}/${session.min_required}, cần tuyển thêm ${session.recruit_count_needed}). Vào Mini App để tạo bài tuyển vãng lai.`
@@ -171,7 +189,7 @@ export async function sendDueCostReminders(settings: SettingsDocT) {
   }
 }
 
-function shiftMonth(monthStr: string, delta: number) {
+export function shiftMonth(monthStr: string, delta: number) {
   const [y, m] = monthStr.split("-").map(Number);
   const d = new Date(Date.UTC(y, m - 1 + delta, 1));
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
@@ -200,7 +218,7 @@ export async function runDueMonthlySettlement(settings: SettingsDocT) {
 
   for (const session of sessions) {
     const costs = await SessionCost.find({ session_id: session._id });
-    const sessionTotal = costs.reduce((sum, c) => sum + c.total_amount, 0);
+    const sessionTotal = costs.reduce((sum, c) => sum + c.total_amount, 0) + (settings.fixed_cost_per_session ?? 0);
     if (sessionTotal === 0) continue;
 
     const presentAttendances = await Attendance.find({

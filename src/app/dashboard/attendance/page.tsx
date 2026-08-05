@@ -12,6 +12,7 @@ type SessionItem = {
   poll_sent_at?: string;
   need_recruit?: boolean;
   recruit_count_needed?: number;
+  notes?: string;
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -25,7 +26,7 @@ export default function AttendancePage() {
   const [sessions, setSessions] = useState<SessionItem[] | null>(null);
   const [form, setForm] = useState({ date: "", start_time: "18:30", end_time: "20:00", min_required: 8 });
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [expandedCostId, setExpandedCostId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   function load() {
     fetch("/api/sessions")
@@ -129,15 +130,151 @@ export default function AttendancePage() {
                 {s.poll_sent_at ? "Đã gửi poll" : "Gửi poll điểm danh"}
               </button>
               <button
-                onClick={() => setExpandedCostId(expandedCostId === s._id ? null : s._id)}
+                onClick={() => setExpandedId(expandedId === s._id ? null : s._id)}
                 className="rounded border border-zinc-300 px-3 py-1.5 text-xs font-medium"
               >
-                Nhập chi phí
+                {expandedId === s._id ? "Thu gọn" : "Xem chi tiết"}
               </button>
             </div>
-            {expandedCostId === s._id && <CostForm sessionId={s._id} />}
+            {expandedId === s._id && <SessionDetail session={s} onChanged={load} />}
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+const ANSWER_LABEL: Record<string, string> = {
+  present: "Có",
+  absent: "Không",
+  no_response: "Chưa trả lời",
+};
+
+const ANSWER_STYLE: Record<string, string> = {
+  present: "bg-emerald-100 text-emerald-700",
+  absent: "bg-rose-100 text-rose-700",
+  no_response: "bg-zinc-100 text-zinc-500",
+};
+
+type AttendanceEntry = { member_id: string; full_name: string; username?: string; answer: string };
+type AttendanceDetail = {
+  list: AttendanceEntry[];
+  presentCount: number;
+  absentCount: number;
+  noResponseCount: number;
+};
+
+function SessionDetail({ session, onChanged }: { session: SessionItem; onChanged: () => void }) {
+  const [attendance, setAttendance] = useState<AttendanceDetail | null>(null);
+  const [notes, setNotes] = useState(session.notes ?? "");
+  const [savingNotes, setSavingNotes] = useState(false);
+  const [reminding, setReminding] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const isCancelled = session.status === "cancelled";
+
+  useEffect(() => {
+    fetch(`/api/sessions/${session._id}/attendance`)
+      .then((r) => r.json())
+      .then(setAttendance);
+  }, [session._id]);
+
+  async function handleSaveNotes() {
+    setSavingNotes(true);
+    await fetch(`/api/sessions/${session._id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notes }),
+    });
+    setSavingNotes(false);
+  }
+
+  async function handleRemind() {
+    setReminding(true);
+    const res = await fetch(`/api/sessions/${session._id}/remind`, { method: "POST" });
+    setReminding(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error ?? "Gửi nhắc nhở thất bại");
+    }
+  }
+
+  async function handleCancel() {
+    if (!window.confirm("Xác nhận hủy buổi tập này?")) return;
+    setCancelling(true);
+    const res = await fetch(`/api/sessions/${session._id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "cancelled" }),
+    });
+    setCancelling(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error ?? "Hủy buổi tập thất bại");
+      return;
+    }
+    onChanged();
+  }
+
+  return (
+    <div className="mt-3 flex flex-col gap-3">
+      <div className="rounded-lg bg-zinc-50 p-3">
+        <h3 className="mb-2 text-xs font-semibold text-zinc-700">Điểm danh</h3>
+        {!attendance && <p className="text-xs text-zinc-400">Đang tải...</p>}
+        {attendance && (
+          <>
+            <p className="mb-2 text-xs text-zinc-500">
+              {attendance.presentCount} có mặt · {attendance.absentCount} không tham gia ·{" "}
+              {attendance.noResponseCount} chưa trả lời
+            </p>
+            <div className="flex flex-col gap-1">
+              {attendance.list.map((m) => (
+                <div key={m.member_id} className="flex items-center justify-between text-sm">
+                  <span>{m.full_name}</span>
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${ANSWER_STYLE[m.answer]}`}>
+                    {ANSWER_LABEL[m.answer] ?? m.answer}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      <CostForm sessionId={session._id} />
+
+      <div className="rounded-lg bg-zinc-50 p-3">
+        <h3 className="mb-2 text-xs font-semibold text-zinc-700">Ghi chú</h3>
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={2}
+          placeholder="Ghi chú cho buổi tập này..."
+          className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+        />
+        <button
+          onClick={handleSaveNotes}
+          disabled={savingNotes}
+          className="mt-2 rounded bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+        >
+          Lưu ghi chú
+        </button>
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          onClick={handleRemind}
+          disabled={reminding || isCancelled}
+          className="rounded border border-zinc-300 px-3 py-1.5 text-xs font-medium disabled:opacity-40"
+        >
+          Nhắc điểm danh
+        </button>
+        <button
+          onClick={handleCancel}
+          disabled={cancelling || isCancelled}
+          className="rounded border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-600 disabled:opacity-40"
+        >
+          {isCancelled ? "Đã hủy" : "Hủy buổi tập"}
+        </button>
       </div>
     </div>
   );
@@ -148,6 +285,7 @@ type CostSummary = {
   costs: { item_id: { _id: string }; quantity: number }[];
   items: ItemConfigItem[];
   presentCount: number;
+  fixedCost: number;
   total: number;
   perPerson: number;
 };
@@ -183,18 +321,22 @@ function CostForm({ sessionId }: { sessionId: string }) {
     setData((prev) => (prev ? { ...prev, total: summary.total, perPerson: summary.perPerson, presentCount: summary.presentCount } : prev));
   }
 
-  if (!data) return <p className="mt-3 text-xs text-zinc-400">Đang tải...</p>;
+  if (!data) return <p className="text-xs text-zinc-400">Đang tải...</p>;
 
   if (data.items.length === 0) {
     return (
-      <p className="mt-3 text-xs text-zinc-400">
+      <p className="text-xs text-zinc-400">
         Chưa có danh mục vật phẩm. Vào tab Cấu hình để thêm (VD: trái cầu, chai nước).
       </p>
     );
   }
 
   return (
-    <div className="mt-3 rounded-lg bg-zinc-50 p-3">
+    <div className="rounded-lg bg-zinc-50 p-3">
+      <h3 className="mb-2 text-xs font-semibold text-zinc-700">Chi phí</h3>
+      <p className="mb-2 text-xs text-zinc-500">
+        Chi phí cố định: <b>{data.fixedCost.toLocaleString("vi-VN")}đ</b>
+      </p>
       {data.items.map((item) => (
         <div key={item._id} className="flex items-center justify-between gap-2 py-1">
           <span className="text-sm">

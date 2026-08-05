@@ -4,12 +4,21 @@ import { useEffect, useState } from "react";
 
 const WEEKDAY_LABEL = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
 
-type ScheduleEntry = { weekday: number; start_time: string; end_time: string };
+type ScheduleEntry = {
+  weekday: number;
+  start_time: string;
+  end_time: string;
+  _id?: string;
+  // id job tương ứng trên cron-job.org — chỉ để hiển thị/round-trip, không chỉnh sửa trực tiếp ở UI.
+  cronjob_id?: number;
+};
 type Settings = {
   club_name: string;
   main_group_chat_id?: number;
   admin_group_chat_id?: number;
   weekly_schedule: ScheduleEntry[];
+  required_participants: number;
+  fixed_cost_per_session: number;
   reminder_hours_before: number;
   cost_survey_minutes_after: number;
   monthly_settlement_day: number;
@@ -19,6 +28,7 @@ export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     fetch("/api/settings")
@@ -29,11 +39,14 @@ export default function SettingsPage() {
   async function handleSave() {
     if (!settings) return;
     setSaving(true);
-    await fetch("/api/settings", {
+    const res = await fetch("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),
     });
+    const updated = await res.json();
+    setSettings(updated);
+    setWarnings(updated.warnings ?? []);
     setSaving(false);
     setSavedAt(Date.now());
   }
@@ -88,6 +101,18 @@ export default function SettingsPage() {
 
       <section className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4">
         <h2 className="text-sm font-semibold text-zinc-700">Lịch tập hàng tuần</h2>
+        <LabeledInput
+          label="Số lượng tham gia mỗi buổi"
+          type="number"
+          value={settings.required_participants}
+          onChange={(v) => setSettings({ ...settings, required_participants: Number(v) })}
+        />
+        <LabeledInput
+          label="Chi phí cố định mỗi buổi (đ)"
+          type="number"
+          value={settings.fixed_cost_per_session}
+          onChange={(v) => setSettings({ ...settings, fixed_cost_per_session: Number(v) })}
+        />
         {settings.weekly_schedule.map((entry, i) => (
           <div key={i} className="flex items-center gap-2">
             <select
@@ -123,6 +148,9 @@ export default function SettingsPage() {
         </button>
         <p className="text-xs text-zinc-400">
           Cron sẽ tự tạo buổi tập & gửi poll dựa theo lịch này (khi đã bật cron ngoài, xem README).
+          Số lượng tham gia ở trên dùng làm mốc &quot;đủ/thiếu người&quot; và số người tối thiểu mặc
+          định cho buổi được tự tạo. Chi phí cố định được cộng thêm vào chi phí vật phẩm của mỗi
+          buổi khi tính sao kê.
         </p>
       </section>
 
@@ -155,6 +183,13 @@ export default function SettingsPage() {
       >
         {saving ? "Đang lưu..." : savedAt ? "Đã lưu ✓" : "Lưu cấu hình"}
       </button>
+      {warnings.length > 0 && (
+        <ul className="flex flex-col gap-1 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700">
+          {warnings.map((w, i) => (
+            <li key={i}>⚠️ {w}</li>
+          ))}
+        </ul>
+      )}
 
       <ItemConfigsSection />
     </div>

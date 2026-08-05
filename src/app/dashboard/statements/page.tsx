@@ -11,23 +11,45 @@ type Statement = {
   status: "pending" | "paid_reported" | "approved";
 };
 
+type MemberOption = { _id: string; full_name: string };
+
 const STATUS_LABEL: Record<Statement["status"], string> = {
   pending: "Chưa thanh toán",
   paid_reported: "Chờ duyệt",
   approved: "Đã duyệt",
 };
 
+function currentVNYearMonth() {
+  const now = new Date(Date.now() + 7 * 60 * 60 * 1000);
+  return { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
+}
+
 export default function StatementsPage() {
   const [statements, setStatements] = useState<Statement[] | null>(null);
+  const [members, setMembers] = useState<MemberOption[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
 
+  const [memberId, setMemberId] = useState("");
+  const [month, setMonth] = useState("");
+  const [year, setYear] = useState("");
+
+  useEffect(() => {
+    fetch("/api/members")
+      .then((r) => r.json())
+      .then(setMembers);
+  }, []);
+
   function load() {
-    fetch("/api/statements")
+    const params = new URLSearchParams();
+    if (memberId) params.set("memberId", memberId);
+    if (month) params.set("month", month);
+    if (year) params.set("year", year);
+    fetch(`/api/statements?${params.toString()}`)
       .then((r) => r.json())
       .then(setStatements);
   }
 
-  useEffect(load, []);
+  useEffect(load, [memberId, month, year]);
 
   async function handleApprove(id: string) {
     setBusyId(id);
@@ -36,12 +58,54 @@ export default function StatementsPage() {
     load();
   }
 
+  const { year: thisYear } = currentVNYearMonth();
+  const yearOptions = Array.from({ length: 4 }, (_, i) => thisYear - i);
+
   return (
     <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap gap-2 rounded-xl border border-zinc-200 bg-white p-3">
+        <select
+          value={memberId}
+          onChange={(e) => setMemberId(e.target.value)}
+          className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
+        >
+          <option value="">Tất cả thành viên</option>
+          {members.map((m) => (
+            <option key={m._id} value={m._id}>
+              {m.full_name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={month}
+          onChange={(e) => setMonth(e.target.value)}
+          className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
+        >
+          <option value="">Tất cả tháng</option>
+          {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+            <option key={m} value={m}>
+              Tháng {m}
+            </option>
+          ))}
+        </select>
+        <select
+          value={year}
+          onChange={(e) => setYear(e.target.value)}
+          className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
+        >
+          <option value="">Tất cả năm</option>
+          {yearOptions.map((y) => (
+            <option key={y} value={y}>
+              {y}
+            </option>
+          ))}
+        </select>
+      </div>
+
       {statements === null && <p className="text-sm text-zinc-400">Đang tải...</p>}
       {statements?.length === 0 && (
         <p className="text-sm text-zinc-400">
-          Chưa có sao kê nào. Sao kê được tự động tạo vào ngày chốt tháng đã cấu hình.
+          Không có sao kê nào khớp bộ lọc. Sao kê được tự động tạo vào ngày chốt tháng đã cấu hình.
         </p>
       )}
       {statements?.map((s) => (

@@ -12,18 +12,20 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const { id } = await params;
   await connectDB();
 
-  const [costs, items, presentCount] = await Promise.all([
+  const [costs, items, presentCount, settings] = await Promise.all([
     SessionCost.find({ session_id: id }).populate("item_id", "name unit unit_price"),
     ItemConfig.find().sort({ name: 1 }),
     Attendance.countDocuments({ session_id: id, answer: "present" }),
+    getSettings(),
   ]);
 
-  const total = costs.reduce((sum, c) => sum + c.total_amount, 0);
+  const total = costs.reduce((sum, c) => sum + c.total_amount, 0) + (settings.fixed_cost_per_session ?? 0);
 
   return NextResponse.json({
     costs,
     items,
     presentCount,
+    fixedCost: settings.fixed_cost_per_session ?? 0,
     total,
     perPerson: presentCount > 0 ? Math.round(total / presentCount) : 0,
   });
@@ -44,7 +46,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const session = await Session.findById(id);
   if (!session) return NextResponse.json({ error: "Không tìm thấy buổi tập" }, { status: 404 });
 
-  let total = 0;
+  const settings = await getSettings();
+
+  let total = settings.fixed_cost_per_session ?? 0;
   for (const entry of body.items as { item_id: string; quantity: number }[]) {
     const item = await ItemConfig.findById(entry.item_id);
     if (!item || !entry.quantity) continue;
@@ -62,7 +66,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const presentCount = await Attendance.countDocuments({ session_id: id, answer: "present" });
   const perPerson = presentCount > 0 ? Math.round(total / presentCount) : 0;
 
-  const settings = await getSettings();
   if (settings.admin_group_chat_id) {
     await sendMessage(
       settings.admin_group_chat_id,

@@ -3,8 +3,9 @@ import { connectDB } from "@/lib/mongodb";
 import { Member } from "@/lib/models";
 import { verifyTelegramInitData } from "@/lib/telegram-auth";
 
-// Dùng khi DB chưa có admin nào: tạo 1 member thường từ Telegram initData,
-// sau đó admin hệ thống tự vào DB nâng role lên "admin" cho tài khoản này.
+// Dùng cho 2 nút ở màn hình đăng nhập: "Tham gia với tư cách thành viên" và
+// "Gửi yêu cầu làm admin" — cả 2 đều chỉ tạo 1 member thường (role=member) từ
+// Telegram initData. Muốn nâng thành admin thì admin hệ thống tự vào DB sửa role.
 export async function POST(request: NextRequest) {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   if (!botToken) {

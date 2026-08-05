@@ -4,15 +4,28 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type AuthState = "checking" | "error" | "not-telegram";
-type RequestAdminState = "idle" | "sending" | "sent" | "error";
+type JoinKind = "member" | "admin";
+type JoinState = "idle" | "sending" | "sent" | "error";
+type AdminLoginState = "idle" | "sending" | "error";
+
+const JOIN_SENT_MESSAGE: Record<JoinKind, string> = {
+  member: "Đã ghi nhận. Bạn sẽ được xác nhận thành viên rồi mở lại app.",
+  admin: "Đã gửi yêu cầu. Vui lòng chờ được cấp quyền admin rồi mở lại app.",
+};
 
 export default function AppEntry() {
   const router = useRouter();
   const [state, setState] = useState<AuthState>("checking");
   const [errorMessage, setErrorMessage] = useState("");
   const [initData, setInitData] = useState("");
-  const [requestAdminState, setRequestAdminState] = useState<RequestAdminState>("idle");
-  const [requestAdminError, setRequestAdminError] = useState("");
+  const [joinState, setJoinState] = useState<JoinState>("idle");
+  const [joinKind, setJoinKind] = useState<JoinKind | null>(null);
+  const [joinError, setJoinError] = useState("");
+
+  const [adminEmail, setAdminEmail] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [adminLoginState, setAdminLoginState] = useState<AdminLoginState>("idle");
+  const [adminLoginError, setAdminLoginError] = useState("");
 
   useEffect(() => {
     async function authenticate() {
@@ -52,14 +65,15 @@ export default function AppEntry() {
     void authenticate();
   }, [router]);
 
-  async function handleRequestAdmin() {
-    if (!initData || requestAdminState === "sending") return;
+  async function handleJoin(kind: JoinKind) {
+    if (!initData || joinState === "sending") return;
 
-    setRequestAdminState("sending");
-    setRequestAdminError("");
+    setJoinState("sending");
+    setJoinKind(kind);
+    setJoinError("");
 
     try {
-      const res = await fetch("/api/auth/request-admin", {
+      const res = await fetch("/api/auth/join", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ initData }),
@@ -68,10 +82,32 @@ export default function AppEntry() {
       if (!res.ok) {
         throw new Error(data.error ?? "Gửi yêu cầu thất bại");
       }
-      setRequestAdminState("sent");
+      setJoinState("sent");
     } catch (err) {
-      setRequestAdminState("error");
-      setRequestAdminError(err instanceof Error ? err.message : "Gửi yêu cầu thất bại");
+      setJoinState("error");
+      setJoinError(err instanceof Error ? err.message : "Gửi yêu cầu thất bại");
+    }
+  }
+
+  async function handleAdminLogin(e: React.FormEvent) {
+    e.preventDefault();
+    setAdminLoginState("sending");
+    setAdminLoginError("");
+
+    try {
+      const res = await fetch("/api/auth/admin-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: adminEmail, password: adminPassword }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error ?? "Đăng nhập thất bại");
+      }
+      router.replace("/dashboard");
+    } catch (err) {
+      setAdminLoginState("error");
+      setAdminLoginError(err instanceof Error ? err.message : "Đăng nhập thất bại");
     }
   }
 
@@ -81,6 +117,36 @@ export default function AppEntry() {
         <p className="text-zinc-600">
           Vui lòng mở ứng dụng này từ Telegram (qua nút Menu của bot) để đăng nhập.
         </p>
+
+        <form onSubmit={handleAdminLogin} className="mt-6 flex w-full max-w-xs flex-col gap-2 text-left">
+          <p className="text-xs font-medium text-zinc-400">Hoặc đăng nhập bằng tài khoản admin</p>
+          <input
+            type="email"
+            required
+            placeholder="Email"
+            value={adminEmail}
+            onChange={(e) => setAdminEmail(e.target.value)}
+            className="rounded border border-zinc-300 px-3 py-2 text-sm"
+          />
+          <input
+            type="password"
+            required
+            placeholder="Mật khẩu"
+            value={adminPassword}
+            onChange={(e) => setAdminPassword(e.target.value)}
+            className="rounded border border-zinc-300 px-3 py-2 text-sm"
+          />
+          <button
+            type="submit"
+            disabled={adminLoginState === "sending"}
+            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          >
+            {adminLoginState === "sending" ? "Đang đăng nhập..." : "Đăng nhập"}
+          </button>
+          {adminLoginState === "error" && (
+            <p className="text-sm text-red-500">{adminLoginError}</p>
+          )}
+        </form>
       </Centered>
     );
   }
@@ -93,24 +159,34 @@ export default function AppEntry() {
           Nếu bạn là quản trị viên CLB, hãy liên hệ để được thêm vào danh sách admin.
         </p>
 
-        {requestAdminState === "sent" ? (
+        {joinState === "sent" ? (
           <p className="mt-4 text-sm font-medium text-emerald-600">
-            Đã gửi yêu cầu. Vui lòng chờ được cấp quyền admin rồi mở lại app.
+            {JOIN_SENT_MESSAGE[joinKind ?? "member"]}
           </p>
         ) : (
-          <button
-            type="button"
-            onClick={handleRequestAdmin}
-            disabled={!initData || requestAdminState === "sending"}
-            className="mt-4 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-          >
-            {requestAdminState === "sending" ? "Đang gửi..." : "Gửi yêu cầu làm admin"}
-          </button>
+          <div className="mt-4 flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => handleJoin("member")}
+              disabled={!initData || joinState === "sending"}
+              className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 disabled:opacity-50"
+            >
+              {joinState === "sending" && joinKind === "member"
+                ? "Đang gửi..."
+                : "Tham gia với tư cách thành viên"}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleJoin("admin")}
+              disabled={!initData || joinState === "sending"}
+              className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {joinState === "sending" && joinKind === "admin" ? "Đang gửi..." : "Gửi yêu cầu làm admin"}
+            </button>
+          </div>
         )}
 
-        {requestAdminState === "error" && (
-          <p className="mt-2 text-sm text-red-500">{requestAdminError}</p>
-        )}
+        {joinState === "error" && <p className="mt-2 text-sm text-red-500">{joinError}</p>}
       </Centered>
     );
   }

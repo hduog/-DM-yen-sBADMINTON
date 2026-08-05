@@ -9,7 +9,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <div className="flex min-h-screen flex-1 flex-col">
       <DashboardNav fullName={admin.full_name} />
-      <main className="flex-1 px-4 py-4">{children}</main>
+      <main className="flex-1 px-4 py-4 pb-[calc(4.5rem+env(safe-area-inset-bottom))]">{children}</main>
     </div>
   );
 }
