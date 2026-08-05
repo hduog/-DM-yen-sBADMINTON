@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { connectDB } from "@/lib/mongodb";
-import { Attendance, Member, MonthlyStatement, Session } from "@/lib/models";
+import { Attendance, Member, MonthlyStatement, Session, SessionMemberCost } from "@/lib/models";
 import { requireAdmin } from "@/lib/auth-guard";
 import { vnNow } from "@/lib/session-actions";
 
@@ -33,12 +33,34 @@ export async function GET(
     answer: "present",
   });
 
+  // Breakdown chi phí từng buổi tập trong tháng đang xem — chỉ hiển thị (không chỉnh sửa được),
+  // dữ liệu lấy từ SessionMemberCost ghi tại thời điểm quyết toán (settleSessionCost).
+  const memberSessionCosts = await SessionMemberCost.find({
+    member_id: id,
+    session_id: { $in: sessionsInMonth.map((s) => s._id) },
+  }).populate("session_id", "date start_time end_time status");
+
+  const sessionCosts = memberSessionCosts
+    .map((c) => ({
+      session: c.session_id as unknown as {
+        _id: string;
+        date: Date;
+        start_time: string;
+        end_time: string;
+        status: string;
+      },
+      amount: c.amount,
+      units: c.units,
+    }))
+    .sort((a, b) => new Date(a.session.date).getTime() - new Date(b.session.date).getTime());
+
   const statements = await MonthlyStatement.find({ member_id: id }).sort({ month: -1 });
 
   return NextResponse.json({
     member,
     monthKey,
     sessionsAttended,
+    sessionCosts,
     statements,
   });
 }

@@ -3,7 +3,12 @@ import { connectDB } from "@/lib/mongodb";
 import { Session } from "@/lib/models";
 import { getSettings } from "@/lib/models/Settings";
 import { requireActiveMember } from "@/lib/auth-guard";
-import { getSessionAttendanceDetail, getSessionCostUnits, recordAttendanceVote } from "@/lib/session-actions";
+import {
+  combineVNDateTime,
+  getSessionAttendanceDetail,
+  getSessionCostUnits,
+  recordAttendanceVote,
+} from "@/lib/session-actions";
 
 // Dùng bởi trang /attend/[id] — thay cho vote qua Telegram poll. Cho phép cả admin lẫn member
 // thường (requireActiveMember), không phải requireAdmin.
@@ -57,6 +62,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (!session) return NextResponse.json({ error: "Không tìm thấy buổi tập" }, { status: 404 });
   if (session.status === "cancelled") {
     return NextResponse.json({ error: "Buổi tập đã bị huỷ, không thể điểm danh" }, { status: 400 });
+  }
+  const startAt = combineVNDateTime(session.date, session.start_time);
+  if (new Date() >= startAt) {
+    return NextResponse.json(
+      { error: "Đã quá giờ, buổi tập đã bắt đầu nên không thể điểm danh nữa" },
+      { status: 400 }
+    );
   }
 
   const settings = await getSettings();

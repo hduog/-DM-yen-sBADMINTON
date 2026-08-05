@@ -3,8 +3,7 @@ import { connectDB } from "@/lib/mongodb";
 import { Session } from "@/lib/models";
 import { getSettings } from "@/lib/models/Settings";
 import { requireAdmin } from "@/lib/auth-guard";
-import { formatVNDate, settleSessionCost } from "@/lib/session-actions";
-import { sendMessage } from "@/lib/telegram";
+import { combineVNDateTime, sendSettlementNotifications, settleSessionCost } from "@/lib/session-actions";
 
 // Nút "Quyết toán" — tính chi phí buổi tập (item * đơn giá + chi phí cố định), chia theo suất
 // (tái dùng settleSessionCost) và cộng vào sao kê tháng chứa ngày đó. Idempotent qua
@@ -30,16 +29,25 @@ export async function POST(
   if (session.cost_settled_at) {
     return NextResponse.json({ error: "Buổi tập này đã được quyết toán" }, { status: 400 });
   }
+  if (session.pass_court_at) {
+    return NextResponse.json(
+      { error: "Buổi tập đã pass sân — không có gì để quyết toán" },
+      { status: 400 }
+    );
+  }
+  const endAt = combineVNDateTime(session.date, session.end_time);
+  if (new Date() < endAt) {
+    return NextResponse.json(
+      { error: "Không thể quyết toán buổi tập trong tương lai — chờ đến khi buổi tập kết thúc" },
+      { status: 400 }
+    );
+  }
 
   const settings = await getSettings();
   const result = await settleSessionCost(session, settings);
 
-  if (settings.admin_group_chat_id && result) {
-    const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
-    await sendMessage(
-      settings.admin_group_chat_id,
-      `🧮 Đã quyết toán buổi tập ${dateLabel}: tổng ${result.total.toLocaleString("vi-VN")}đ, ${result.totalUnits} người, đã cộng vào sao kê tháng ${result.month}.`
-    );
+  if (result) {
+    await sendSettlementNotifications(session, settings, result);
   }
 
   return NextResponse.json({ ok: true, session, result: result ? { total: result.total, totalUnits: result.totalUnits, month: result.month } : null });

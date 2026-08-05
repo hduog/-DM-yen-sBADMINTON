@@ -6,8 +6,9 @@ import { requireAdmin } from "@/lib/auth-guard";
 import { formatVNDate } from "@/lib/session-actions";
 import { sendMessage } from "@/lib/telegram";
 
-// Nút "Pass sân" — thuần thông báo vào nhóm chính rằng CLB không dùng sân buổi này, không đổi
-// trạng thái buổi tập hay tiền bạc gì. Có thể bấm lại nhiều lần để nhắc lại nếu cần.
+// Nút "Pass sân" — thông báo vào nhóm chính rằng CLB không dùng sân buổi này, đồng thời khoá buổi
+// tập lại (giống hủy/quyết toán): không còn gì để điểm danh/chi phí cho buổi đã pass, nên chỉ bấm
+// được 1 lần — muốn làm lại thì dùng nút Reset.
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -20,6 +21,12 @@ export async function POST(
 
   const session = await Session.findById(id);
   if (!session) return NextResponse.json({ error: "Không tìm thấy buổi tập" }, { status: 404 });
+  if (session.cost_settled_at || session.pass_court_at || session.status === "cancelled") {
+    return NextResponse.json(
+      { error: "Buổi tập đã quyết toán, đã huỷ, hoặc đã pass sân — không thể chỉnh sửa" },
+      { status: 400 }
+    );
+  }
 
   const settings = await getSettings();
   if (!settings.main_group_chat_id) {
@@ -35,5 +42,8 @@ export async function POST(
     `🔄 CLB không sử dụng sân buổi tập ${dateLabel}. Ai cần sân giờ này liên hệ Ban quản trị để nhận lại.`
   );
 
-  return NextResponse.json({ ok: true });
+  session.pass_court_at = new Date();
+  await session.save();
+
+  return NextResponse.json(session);
 }

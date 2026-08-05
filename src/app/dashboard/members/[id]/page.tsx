@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 
@@ -25,10 +25,17 @@ type Statement = {
   status: StatementStatus;
 };
 
+type SessionCostEntry = {
+  session: { _id: string; date: string; start_time: string; end_time: string; status: string };
+  amount: number;
+  units: number;
+};
+
 type MemberDetailData = {
   member: MemberInfo;
   monthKey: string;
   sessionsAttended: number;
+  sessionCosts: SessionCostEntry[];
   statements: Statement[];
 };
 
@@ -48,6 +55,13 @@ function currentVNYearMonth() {
   return { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
 }
 
+const WEEKDAY_LABEL = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+
+function formatSessionDate(dateStr: string) {
+  const date = new Date(dateStr);
+  return `${WEEKDAY_LABEL[date.getUTCDay()]} ${date.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" })}`;
+}
+
 export default function MemberDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
@@ -60,6 +74,7 @@ export default function MemberDetailPage() {
   const [savingChatId, setSavingChatId] = useState(false);
 
   const [cancelling, setCancelling] = useState(false);
+  const [sendingStatement, setSendingStatement] = useState(false);
 
   function load() {
     fetch(`/api/members/${id}?month=${month}&year=${year}`)
@@ -76,11 +91,6 @@ export default function MemberDetailPage() {
 
   useEffect(load, [id, month, year]);
 
-  const selectedStatement = useMemo(
-    () => data?.statements.find((s) => s.month === data.monthKey) ?? null,
-    [data]
-  );
-
   async function handleSaveChatId() {
     setSavingChatId(true);
     await fetch(`/api/members/${id}`, {
@@ -92,6 +102,22 @@ export default function MemberDetailPage() {
     });
     setSavingChatId(false);
     load();
+  }
+
+  async function handleSendStatement() {
+    setSendingStatement(true);
+    const res = await fetch(`/api/members/${id}/send-statement`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ month, year }),
+    });
+    setSendingStatement(false);
+    const resData = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(resData.error ?? "Gửi sao kê thất bại");
+      return;
+    }
+    alert(`Đã gửi sao kê: ${resData.totalAmount.toLocaleString("vi-VN")}đ`);
   }
 
   async function handleCancelMember() {
@@ -216,11 +242,28 @@ export default function MemberDetailPage() {
           Số buổi tham gia: <b>{data.sessionsAttended}</b>
         </p>
 
-        {selectedStatement ? (
-          <StatementEditor key={selectedStatement._id} statement={selectedStatement} onSaved={load} />
-        ) : (
-          <p className="mt-3 text-xs text-zinc-400">Chưa có sao kê cho tháng {data.monthKey}.</p>
-        )}
+        <div className="mt-2 flex flex-col gap-1">
+          {data.sessionCosts.length === 0 && (
+            <p className="text-xs text-zinc-400">Chưa có buổi nào được quyết toán trong tháng này.</p>
+          )}
+          {data.sessionCosts.map((c) => (
+            <div key={c.session._id} className="flex items-center justify-between rounded-lg bg-zinc-50 px-3 py-1.5 text-xs">
+              <span className="text-zinc-600">
+                {formatSessionDate(c.session.date)} · {c.session.start_time}-{c.session.end_time}
+                {c.units > 1 && <span className="text-zinc-400"> ({c.units} suất)</span>}
+              </span>
+              <span className="font-medium">{c.amount.toLocaleString("vi-VN")}đ</span>
+            </div>
+          ))}
+        </div>
+
+        <button
+          onClick={handleSendStatement}
+          disabled={sendingStatement}
+          className="mt-3 w-full rounded-lg border border-zinc-300 py-2 text-sm font-medium disabled:opacity-40"
+        >
+          {sendingStatement ? "Đang gửi..." : "Gửi sao kê tháng này vào Group chat riêng"}
+        </button>
       </section>
 
       <section className="rounded-xl border border-zinc-200 bg-white p-4">
@@ -262,103 +305,3 @@ export default function MemberDetailPage() {
   );
 }
 
-function StatementEditor({ statement, onSaved }: { statement: Statement; onSaved: () => void }) {
-  const [form, setForm] = useState({
-    total_sessions: statement.total_sessions,
-    total_amount: statement.total_amount,
-    status: statement.status,
-  });
-  const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-
-  async function handleSave() {
-    setSaving(true);
-    await fetch(`/api/statements/${statement._id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
-    });
-    setSaving(false);
-    onSaved();
-  }
-
-  async function handleDelete() {
-    if (!confirm(`Xóa sao kê tháng ${statement.month}? Không thể hoàn tác.`)) return;
-    setDeleting(true);
-    await fetch(`/api/statements/${statement._id}`, { method: "DELETE" });
-    setDeleting(false);
-    onSaved();
-  }
-
-  return (
-    <div className="mt-3 rounded-lg bg-zinc-50 p-3">
-      <p className="text-xs font-semibold text-zinc-500">Sao kê tháng {statement.month}</p>
-      <div className="mt-2 grid grid-cols-2 gap-2">
-        <LabeledInput
-          label="Số buổi"
-          type="number"
-          value={form.total_sessions}
-          onChange={(v) => setForm({ ...form, total_sessions: Number(v) })}
-        />
-        <LabeledInput
-          label="Tổng tiền"
-          type="number"
-          value={form.total_amount}
-          onChange={(v) => setForm({ ...form, total_amount: Number(v) })}
-        />
-      </div>
-      <label className="mt-2 flex flex-col gap-1 text-sm">
-        <span className="text-zinc-600">Trạng thái</span>
-        <select
-          value={form.status}
-          onChange={(e) => setForm({ ...form, status: e.target.value as StatementStatus })}
-          className="rounded border border-zinc-300 px-2 py-1.5"
-        >
-          <option value="pending">Chưa thanh toán</option>
-          <option value="paid_reported">Chờ duyệt</option>
-          <option value="approved">Đã duyệt</option>
-        </select>
-      </label>
-      <div className="mt-3 flex gap-2">
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="rounded bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
-        >
-          {saving ? "Đang lưu..." : "Lưu sao kê"}
-        </button>
-        <button
-          onClick={handleDelete}
-          disabled={deleting}
-          className="rounded border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 disabled:opacity-40"
-        >
-          {deleting ? "Đang xóa..." : "Xóa sao kê"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function LabeledInput({
-  label,
-  value,
-  onChange,
-  type = "text",
-}: {
-  label: string;
-  value: string | number;
-  onChange: (v: string) => void;
-  type?: string;
-}) {
-  return (
-    <label className="flex flex-col gap-1 text-sm">
-      <span className="text-zinc-600">{label}</span>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded border border-zinc-300 px-2 py-1.5"
-      />
-    </label>
-  );
-}

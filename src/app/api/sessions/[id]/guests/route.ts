@@ -38,6 +38,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const session = await Session.findById(id);
   if (!session) return NextResponse.json({ error: "Không tìm thấy buổi tập" }, { status: 404 });
+  if (session.cost_settled_at || session.pass_court_at || session.status === "cancelled") {
+    return NextResponse.json({ error: "Buổi tập đã quyết toán hoặc đã huỷ, không thể chỉnh sửa" }, { status: 400 });
+  }
 
   const member = await Member.findOne({ _id: responsibleMemberId, del_flag: { $ne: true } });
   if (!member) {

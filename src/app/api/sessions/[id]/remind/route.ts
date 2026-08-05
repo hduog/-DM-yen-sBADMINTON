@@ -15,6 +15,9 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
 
   const session = await Session.findById(id);
   if (!session) return NextResponse.json({ error: "Không tìm thấy buổi tập" }, { status: 404 });
+  if (session.cost_settled_at || session.pass_court_at || session.status === "cancelled") {
+    return NextResponse.json({ error: "Buổi tập đã quyết toán hoặc đã huỷ, không thể chỉnh sửa" }, { status: 400 });
+  }
 
   const settings = await getSettings();
   if (!settings.main_group_chat_id) {

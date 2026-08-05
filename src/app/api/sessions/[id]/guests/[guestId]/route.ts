@@ -24,6 +24,10 @@ export async function DELETE(
   }
 
   const session = await Session.findById(id);
+  if (session && (session.cost_settled_at || session.pass_court_at || session.status === "cancelled")) {
+    return NextResponse.json({ error: "Buổi tập đã quyết toán hoặc đã huỷ, không thể chỉnh sửa" }, { status: 400 });
+  }
+
   await guest.deleteOne();
 
   if (session) {

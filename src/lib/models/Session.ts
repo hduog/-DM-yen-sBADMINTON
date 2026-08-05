@@ -22,6 +22,8 @@ const SessionSchema = new Schema(
     // Đã phân bổ chi phí buổi này vào MonthlyStatement chưa — chặn quyết toán/huỷ trùng lặp cộng
     // dồn 2 lần, xem settleSessionCost() trong session-actions.ts.
     cost_settled_at: { type: Date },
+    // Lần gần nhất bấm "Pass sân" — thuần đánh dấu để hiển thị UI, không khoá gì.
+    pass_court_at: { type: Date },
   },
   { timestamps: true }
 );

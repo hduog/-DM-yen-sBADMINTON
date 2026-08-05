@@ -49,6 +49,7 @@ type SessionDocT = HydratedDocument<{
   confirmation_sent_at?: Date;
   cost_reminder_sent_at?: Date;
   cost_settled_at?: Date;
+  pass_court_at?: Date;
   need_recruit?: boolean;
   recruit_count_needed?: number;
 }>;
@@ -380,6 +381,111 @@ export async function settleSessionCost(session: SessionDocT, settings: Settings
   await session.save();
 
   return { total, totalUnits, shares, month };
+}
+
+// Gửi thông báo chi tiết ngay sau khi quyết toán (nút "Quyết toán" trong màn quản lý điểm danh):
+// (1) vào nhóm quản lý — chi phí cố định, vật phẩm/số lượng, ai tham gia, số tiền mỗi người;
+// (2) vào group riêng (statement_chat_id) của từng thành viên có suất phải trả — số tiền họ cần
+// thanh toán cho buổi tập hôm nay. Dùng chung shares/total đã tính sẵn từ settleSessionCost để
+// khỏi tính lại, tránh lệch số giữa 2 nơi.
+export async function sendSettlementNotifications(
+  session: SessionDocT,
+  settings: SettingsDocT,
+  result: { total: number; totalUnits: number; shares: Map<string, number>; month: string }
+) {
+  const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
+
+  const [costs, guests, detail, members] = await Promise.all([
+    SessionCost.find({ session_id: session._id }).populate<{ item_id: { name: string; unit: string } | null }>(
+      "item_id",
+      "name unit"
+    ),
+    SessionGuest.find({ session_id: session._id }).populate<{
+      responsible_member_id: { full_name: string } | null;
+    }>("responsible_member_id", "full_name"),
+    getSessionAttendanceDetail(session._id.toString()),
+    Member.find({ _id: { $in: [...result.shares.keys()] } }),
+  ]);
+
+  const memberById = new Map(members.map((m) => [m._id.toString(), m]));
+  const presentNames = detail.list.filter((m) => m.answer === "present").map((m) => m.full_name);
+
+  if (settings.admin_group_chat_id) {
+    const lines = [`🧮 <b>Đã quyết toán buổi tập ${dateLabel}</b>`, ""];
+
+    const fixedCost = settings.fixed_cost_per_session ?? 0;
+    if (session.status === "cancelled") {
+      lines.push(`Buổi huỷ — chỉ tính chi phí cố định: ${fixedCost.toLocaleString("vi-VN")}đ`);
+    } else {
+      if (fixedCost > 0) lines.push(`Chi phí cố định: ${fixedCost.toLocaleString("vi-VN")}đ`);
+      for (const c of costs) {
+        if (!c.item_id) continue;
+        lines.push(`${c.item_id.name}: ${c.quantity} ${c.item_id.unit} = ${c.total_amount.toLocaleString("vi-VN")}đ`);
+      }
+      lines.push(
+        `Người tham gia (${presentNames.length}): ${presentNames.length > 0 ? presentNames.join(", ") : "(không ai)"}`
+      );
+      if (guests.length > 0) {
+        const guestLabel = guests
+          .map((g) => `${g.guest_name || "khách"} x${g.quantity} (${g.responsible_member_id?.full_name ?? "?"})`)
+          .join(", ");
+        lines.push(`Khách vãng lai: ${guestLabel}`);
+      }
+    }
+
+    lines.push("", `Tổng chi phí: <b>${result.total.toLocaleString("vi-VN")}đ</b> (${result.totalUnits} suất)`, "");
+    lines.push("Số tiền mỗi người:");
+    for (const [memberId, amount] of result.shares) {
+      lines.push(`- ${memberById.get(memberId)?.full_name ?? "(?)"}: ${amount.toLocaleString("vi-VN")}đ`);
+    }
+    lines.push("", `Đã cộng vào sao kê tháng ${result.month}.`);
+
+    await sendMessage(settings.admin_group_chat_id, lines.join("\n"));
+  }
+
+  for (const [memberId, amount] of result.shares) {
+    const member = memberById.get(memberId);
+    if (!member?.statement_chat_id) continue;
+    await sendMessage(
+      member.statement_chat_id,
+      `💵 Buổi tập ${dateLabel}\nSố tiền bạn cần thanh toán hôm nay: <b>${amount.toLocaleString("vi-VN")}đ</b>\n(Đã cộng vào sao kê tháng ${result.month})`
+    );
+  }
+}
+
+// Xoá sạch kết quả quyết toán/huỷ/pass-sân của 1 buổi tập, coi như buổi tập mới tinh — dùng cho
+// nút Reset. Trừ ngược đúng phần đã cộng vào MonthlyStatement qua settleSessionCost, xoá hết
+// SessionMemberCost của buổi. KHÔNG đụng SessionCost/SessionGuest (dữ liệu nguồn admin đã nhập,
+// giữ lại để có thể quyết toán lại). Ném lỗi (không reset gì cả) nếu có sao kê liên quan đã báo
+// thanh toán/đã duyệt — tránh làm sai lệch số tiền thực tế đã thu.
+export async function resetSessionSettlement(session: SessionDocT) {
+  const shares = await SessionMemberCost.find({ session_id: session._id });
+  if (shares.length > 0) {
+    const month = `${session.date.getUTCFullYear()}-${String(session.date.getUTCMonth() + 1).padStart(2, "0")}`;
+    const statements = await MonthlyStatement.find({
+      member_id: { $in: shares.map((s) => s.member_id) },
+      month,
+    });
+    if (statements.some((s) => s.status !== "pending")) {
+      throw new Error("Không thể reset: sao kê tháng này đã có thành viên báo thanh toán hoặc đã được duyệt");
+    }
+
+    for (const share of shares) {
+      await MonthlyStatement.findOneAndUpdate(
+        { member_id: share.member_id, month },
+        { $inc: { total_amount: -share.amount, total_sessions: -1 } }
+      );
+    }
+    await SessionMemberCost.deleteMany({ session_id: session._id });
+  }
+
+  const wasCancelled = session.status === "cancelled";
+  session.cost_settled_at = undefined;
+  session.pass_court_at = undefined;
+  // Trạng thái gốc trước khi huỷ không được lưu lại — reset về "scheduled", các trigger sẵn có
+  // (vote/reconcileDueAttendance) sẽ tự tính lại đúng confirmed_enough/confirmed_shortage khi cần.
+  if (wasCancelled) session.status = "scheduled";
+  await session.save();
 }
 
 export function shiftMonth(monthStr: string, delta: number) {

@@ -24,6 +24,14 @@ const ANSWER_STYLE: Record<string, string> = {
   no_response: "bg-zinc-100 text-zinc-500",
 };
 
+const VN_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+function combineVNDateTime(dateStr: string, hhmm: string): Date {
+  const date = new Date(dateStr);
+  const [h, m] = hhmm.split(":").map(Number);
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), h, m) - VN_OFFSET_MS);
+}
+
 type SessionInfo = {
   _id: string;
   date: string;
@@ -121,6 +129,7 @@ export default function AttendSessionPage() {
   const { session, list } = data;
   const viewer = list.find((m) => m.member_id === data.viewerMemberId);
   const isCancelled = session.status === "cancelled";
+  const isExpired = new Date() >= combineVNDateTime(session.date, session.start_time);
 
   return (
     <div className="flex flex-col gap-4">
@@ -143,6 +152,18 @@ export default function AttendSessionPage() {
         <p className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-500">
           Buổi tập này đã bị huỷ, không thể điểm danh.
         </p>
+      ) : isExpired ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
+          <p>Đã quá giờ điểm danh — buổi tập đã bắt đầu lúc {session.start_time}, bạn không thể điểm danh/cập nhật lựa chọn nữa.</p>
+          {viewer && viewer.answer !== "no_response" && (
+            <p className="mt-2">
+              Lựa chọn trước đó của bạn:{" "}
+              <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${ANSWER_STYLE[viewer.answer]}`}>
+                {ANSWER_LABEL[viewer.answer]}
+              </span>
+            </p>
+          )}
+        </div>
       ) : editing ? (
         <div className="rounded-xl border border-zinc-200 bg-white p-4">
           <h3 className="mb-3 text-sm font-semibold text-zinc-700">

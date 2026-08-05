@@ -26,6 +26,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (body.status === "cancelled" && session.status === "cancelled") {
     return NextResponse.json({ error: "Buổi tập đã bị huỷ trước đó" }, { status: 400 });
   }
+  if (session.cost_settled_at || session.pass_court_at) {
+    return NextResponse.json({ error: "Buổi tập đã quyết toán hoặc đã pass sân, không thể chỉnh sửa" }, { status: 400 });
+  }
 
   if (body.notes !== undefined) session.notes = body.notes;
   if (body.status !== undefined) session.status = body.status;
