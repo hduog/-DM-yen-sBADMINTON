@@ -3,7 +3,7 @@ import { connectDB } from "@/lib/mongodb";
 import { Session } from "@/lib/models";
 import { getSettings } from "@/lib/models/Settings";
 import { requireAdmin } from "@/lib/auth-guard";
-import { sendPollForSession } from "@/lib/session-actions";
+import { sendAttendanceNoticeForSession } from "@/lib/session-actions";
 
 export async function POST(
   _request: Request,
@@ -25,7 +25,13 @@ export async function POST(
       { status: 400 }
     );
   }
+  if (!settings.bot_username) {
+    return NextResponse.json(
+      { error: "Chưa cấu hình Username bot Telegram trong Cấu hình" },
+      { status: 400 }
+    );
+  }
 
-  await sendPollForSession(session, settings);
+  await sendAttendanceNoticeForSession(session, settings);
   return NextResponse.json(session);
 }

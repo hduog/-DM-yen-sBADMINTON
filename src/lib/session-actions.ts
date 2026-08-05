@@ -1,6 +1,6 @@
 import { Attendance, Member, MonthlyStatement, Session, SessionCost } from "@/lib/models";
 import type { SettingsDoc } from "@/lib/models/Settings";
-import { sendMessage, sendPoll } from "@/lib/telegram";
+import { sendMessage } from "@/lib/telegram";
 import type { HydratedDocument } from "mongoose";
 
 type SettingsDocT = HydratedDocument<SettingsDoc>;
@@ -36,14 +36,15 @@ type SessionDocT = HydratedDocument<{
   end_time: string;
   min_required: number;
   status: string;
-  poll_message_id?: number;
-  poll_id?: string;
-  poll_sent_at?: Date;
+  notify_message_id?: number;
+  notify_sent_at?: Date;
   confirmation_sent_at?: Date;
   cost_reminder_sent_at?: Date;
   need_recruit?: boolean;
   recruit_count_needed?: number;
 }>;
+
+type MemberDocT = HydratedDocument<{ full_name: string }>;
 
 type WeeklyScheduleEntryT = { weekday: number; start_time: string; end_time: string };
 
@@ -74,17 +75,17 @@ export async function ensureSessionForScheduleEntry(
 }
 
 // Nếu mốc "trước giờ tập N tiếng" của lần diễn ra kế tiếp đã trôi qua ngay tại thời điểm lưu
-// cấu hình (VD: thêm/sửa lịch tập sau khi mốc kích hoạt trong tuần này đã qua), gửi poll ngay tại
-// đây thay vì đợi cron-job.org kích hoạt lần kế (tuần sau) — tránh bỏ lỡ buổi tập gần nhất.
-// Idempotent qua poll_sent_at, được gọi từ /api/settings sau mỗi lần lưu (xem session-actions.ts).
+// cấu hình (VD: thêm/sửa lịch tập sau khi mốc kích hoạt trong tuần này đã qua), gửi thông báo ngay
+// tại đây thay vì đợi cron-job.org kích hoạt lần kế (tuần sau) — tránh bỏ lỡ buổi tập gần nhất.
+// Idempotent qua notify_sent_at, được gọi từ /api/settings sau mỗi lần lưu (xem session-actions.ts).
 export async function runAttendanceJobIfDue(entry: WeeklyScheduleEntryT, settings: SettingsDocT) {
   const session = await ensureSessionForScheduleEntry(entry, settings);
-  if (session.poll_sent_at) return session;
+  if (session.notify_sent_at) return session;
 
   const startAt = combineVNDateTime(session.date, session.start_time);
   const triggerAt = new Date(startAt.getTime() - settings.reminder_hours_before * 60 * 60 * 1000);
   if (new Date() >= triggerAt) {
-    await sendPollForSession(session, settings);
+    await sendAttendanceNoticeForSession(session, settings);
   }
   return session;
 }
@@ -98,13 +99,17 @@ export async function getSessionAttendanceDetail(sessionId: string) {
     Attendance.find({ session_id: sessionId }),
   ]);
 
-  const answerByMember = new Map(attendances.map((a) => [a.member_id.toString(), a.answer]));
-  const list = members.map((m) => ({
-    member_id: m._id.toString(),
-    full_name: m.full_name,
-    username: m.username,
-    answer: answerByMember.get(m._id.toString()) ?? "no_response",
-  }));
+  const attendanceByMember = new Map(attendances.map((a) => [a.member_id.toString(), a]));
+  const list = members.map((m) => {
+    const attendance = attendanceByMember.get(m._id.toString());
+    return {
+      member_id: m._id.toString(),
+      full_name: m.full_name,
+      username: m.username,
+      answer: attendance?.answer ?? "no_response",
+      reason: attendance?.reason as string | undefined,
+    };
+  });
 
   return {
     list,
@@ -114,28 +119,123 @@ export async function getSessionAttendanceDetail(sessionId: string) {
   };
 }
 
-export async function sendPollForSession(session: SessionDocT, settings: SettingsDocT) {
+type AttendanceDetailT = Awaited<ReturnType<typeof getSessionAttendanceDetail>>;
+
+// Deep link t.me/<bot_username>?startapp=session_<id> — cách duy nhất để 1 link gửi vào GROUP tự
+// mở đúng Mini App kèm danh tính đã ký của người bấm (nút web_app chỉ dùng được ở private chat).
+export function buildAttendDeepLink(sessionId: string, settings: SettingsDocT): string | null {
+  if (!settings.bot_username) return null;
+  return `https://t.me/${settings.bot_username}?startapp=session_${sessionId}`;
+}
+
+// Thay cho sendPollForSession (poll Telegram) — giờ gửi tin nhắn thường kèm nút link tới trang
+// /attend/[id] để thành viên tự vào xác nhận, thay vì vote trực tiếp trong khung poll.
+export async function sendAttendanceNoticeForSession(session: SessionDocT, settings: SettingsDocT) {
+  if (!settings.main_group_chat_id) return;
+  const deepLink = buildAttendDeepLink(session._id.toString(), settings);
+  if (!deepLink) return; // Chưa cấu hình bot_username — bỏ qua, không set notify_sent_at để tự retry lần sau.
+
+  const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
+  const text = `📋 Điểm danh buổi tập ${dateLabel}.\nCần ${session.min_required} người. Bấm nút bên dưới để xác nhận tham gia hoặc không tham gia.`;
+
+  const res = await sendMessage(settings.main_group_chat_id, text, {
+    reply_markup: { inline_keyboard: [[{ text: "Xác nhận điểm danh", url: deepLink }]] },
+  });
+
+  session.notify_message_id = (res as { message_id: number }).message_id;
+  session.notify_sent_at = new Date();
+  await session.save();
+}
+
+// Ghi nhận 1 lượt vote (mới hoặc cập nhật) từ trang /attend/[id], thay cho handlePollAnswer cũ
+// (Telegram poll_answer webhook) — vote giờ đi qua API có session cookie thay vì webhook Telegram.
+export async function recordAttendanceVote(
+  session: SessionDocT,
+  member: MemberDocT,
+  answer: "present" | "absent",
+  reason: string | undefined,
+  settings: SettingsDocT
+): Promise<AttendanceDetailT> {
+  await Attendance.findOneAndUpdate(
+    { session_id: session._id, member_id: member._id },
+    answer === "absent"
+      ? { $set: { answer, reason, answered_at: new Date() } }
+      : { $set: { answer, answered_at: new Date() }, $unset: { reason: "" } },
+    { upsert: true }
+  );
+
+  const detail = await getSessionAttendanceDetail(session._id.toString());
+  await announceVoteToGroup(session, member, answer, reason, detail, settings);
+
+  if (
+    answer === "present" &&
+    session.status === "scheduled" &&
+    detail.presentCount >= session.min_required
+  ) {
+    await announceQuotaReached(session, settings, detail.presentCount);
+  }
+
+  return detail;
+}
+
+// Thông báo cập nhật vào nhóm sau MỌI lượt vote (cả tham gia lẫn không tham gia) — mời các thành
+// viên còn "no_response" bấm lại đúng link để bình chọn.
+async function announceVoteToGroup(
+  session: SessionDocT,
+  member: MemberDocT,
+  answer: "present" | "absent",
+  reason: string | undefined,
+  detail: AttendanceDetailT,
+  settings: SettingsDocT
+) {
   if (!settings.main_group_chat_id) return;
 
-  const question = `Bạn có tham gia buổi tập ${formatVNDate(session.date)} (${session.start_time}-${session.end_time}) không?`;
-  const poll = await sendPoll(settings.main_group_chat_id, question, ["Có", "Không"]);
+  const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
+  const otherPresentNames = detail.list
+    .filter((m) => m.answer === "present" && m.member_id !== member._id.toString())
+    .map((m) => m.full_name);
+  const noResponseNames = detail.list.filter((m) => m.answer === "no_response").map((m) => m.full_name);
 
-  session.poll_message_id = poll.message_id;
-  session.poll_id = poll.poll.id;
-  session.poll_sent_at = new Date();
+  const lines: string[] = [];
+  if (answer === "present") {
+    lines.push(`✅ <b>${member.full_name}</b> đã xác nhận <b>tham gia</b> buổi tập ${dateLabel}.`);
+    if (otherPresentNames.length > 0) lines.push(`Cùng với: ${otherPresentNames.join(", ")}.`);
+  } else {
+    lines.push(`❌ <b>${member.full_name}</b> đã xác nhận <b>không tham gia</b> buổi tập ${dateLabel}.`);
+    lines.push(`Lý do: ${reason}`);
+  }
+  lines.push(`Đã có <b>${detail.presentCount}/${session.min_required}</b> người tham gia.`);
+  if (noResponseNames.length > 0) lines.push(`Mời ${noResponseNames.join(", ")} vào bình chọn.`);
+
+  const deepLink = buildAttendDeepLink(session._id.toString(), settings);
+  await sendMessage(settings.main_group_chat_id, lines.join("\n"), {
+    reply_markup: deepLink ? { inline_keyboard: [[{ text: "Điểm danh ngay", url: deepLink }]] } : undefined,
+  });
+}
+
+// Chốt đủ người ngay khi vote "Có" vừa chạm mốc min_required, thay vì đợi mốc T-5h
+// (reconcileDueAttendance chỉ còn lo nhánh thiếu người).
+async function announceQuotaReached(session: SessionDocT, settings: SettingsDocT, presentCount: number) {
+  session.status = "confirmed_enough";
+  session.confirmation_sent_at = new Date();
   await session.save();
+
+  const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
+  const text = `✅ Buổi tập ${dateLabel} đã đủ người (${presentCount}/${session.min_required}).`;
+  if (settings.main_group_chat_id) await sendMessage(settings.main_group_chat_id, text);
+  if (settings.admin_group_chat_id) await sendMessage(settings.admin_group_chat_id, text);
 }
 
 const CONFIRM_HOURS_BEFORE = 5;
 
 // Chốt "thiếu người" ở mốc T-5h trước giờ tập cho các buổi vẫn còn "scheduled" (chưa đủ vote
-// "Có" — nếu đủ rồi thì handlePollAnswer đã chốt confirmed_enough ngay lúc vote, xem
-// src/app/api/telegram/webhook/route.ts). Không còn xử lý nhánh "enough" ở đây nữa.
+// "tham gia" — nếu đủ rồi thì recordAttendanceVote đã chốt confirmed_enough ngay lúc vote, xem
+// announceQuotaReached). Không còn xử lý nhánh "enough" ở đây nữa.
 export async function reconcileDueAttendance(settings: SettingsDocT) {
   const now = new Date();
   const sessions = await Session.find({
     status: "scheduled",
-    poll_sent_at: { $exists: true },
+    notify_sent_at: { $exists: true },
     confirmation_sent_at: { $exists: false },
   });
 

@@ -51,11 +51,20 @@ export default function AppEntry() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ initData: data }),
         });
+        const resData = await res.json().catch(() => ({}));
         if (!res.ok) {
-          const resData = await res.json().catch(() => ({}));
           throw new Error(resData.error ?? "Đăng nhập thất bại");
         }
-        router.replace("/dashboard");
+
+        const startParam = webApp.initDataUnsafe?.start_param;
+        const sessionMatch = startParam?.match(/^session_([0-9a-f]{24})$/);
+        if (sessionMatch) {
+          router.replace(`/attend/${sessionMatch[1]}`);
+        } else if (resData.member?.role === "admin") {
+          router.replace("/dashboard");
+        } else {
+          router.replace("/attend");
+        }
       } catch (err) {
         setState("error");
         setErrorMessage(err instanceof Error ? err.message : "Đăng nhập thất bại");

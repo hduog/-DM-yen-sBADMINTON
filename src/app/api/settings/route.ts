@@ -37,6 +37,7 @@ export async function PUT(request: NextRequest) {
     "club_name",
     "main_group_chat_id",
     "admin_group_chat_id",
+    "bot_username",
     "weekly_schedule",
     "required_participants",
     "fixed_cost_per_session",

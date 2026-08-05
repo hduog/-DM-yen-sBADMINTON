@@ -11,13 +11,12 @@ const SessionSchema = new Schema(
       enum: ["scheduled", "confirmed_enough", "confirmed_shortage", "cancelled"],
       default: "scheduled",
     },
-    poll_message_id: { type: Number },
-    poll_id: { type: String, index: true }, // id của poll Telegram, dùng để map poll_answer về đúng buổi tập
+    notify_message_id: { type: Number }, // message_id của tin nhắn thông báo điểm danh đã gửi vào nhóm
     need_recruit: { type: Boolean, default: false },
     recruit_count_needed: { type: Number, default: 0 },
     notes: { type: String },
     // Đánh dấu các mốc cron đã chạy để tránh trigger trùng — xem mục 6 thiết kế
-    poll_sent_at: { type: Date },
+    notify_sent_at: { type: Date },
     confirmation_sent_at: { type: Date },
     cost_reminder_sent_at: { type: Date },
   },

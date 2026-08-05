@@ -1,11 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import { getSettings } from "@/lib/models/Settings";
-import { ensureSessionForScheduleEntry, sendPollForSession } from "@/lib/session-actions";
+import { ensureSessionForScheduleEntry, sendAttendanceNoticeForSession } from "@/lib/session-actions";
 
 // Được job cron-job.org của đúng 1 mục weekly_schedule gọi (xem src/lib/cron-sync.ts) — mỗi lịch
-// tập có 1 job riêng, kích hoạt đúng vào mốc "trước giờ tập N tiếng". Idempotent qua poll_sent_at
-// nên cron-job.org retry hay gọi trùng cũng không gửi poll lần 2.
+// tập có 1 job riêng, kích hoạt đúng vào mốc "trước giờ tập N tiếng". Idempotent qua notify_sent_at
+// nên cron-job.org retry hay gọi trùng cũng không gửi thông báo lần 2.
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ entryId: string }> }
@@ -26,9 +26,9 @@ export async function POST(
   }
 
   const session = await ensureSessionForScheduleEntry(entry, settings);
-  if (!session.poll_sent_at) {
-    await sendPollForSession(session, settings);
+  if (!session.notify_sent_at) {
+    await sendAttendanceNoticeForSession(session, settings);
   }
 
-  return NextResponse.json({ ok: true, sessionId: session._id, pollSent: !!session.poll_sent_at });
+  return NextResponse.json({ ok: true, sessionId: session._id, noticeSent: !!session.notify_sent_at });
 }

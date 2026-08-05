@@ -16,6 +16,7 @@ type Settings = {
   club_name: string;
   main_group_chat_id?: number;
   admin_group_chat_id?: number;
+  bot_username?: string;
   weekly_schedule: ScheduleEntry[];
   required_participants: number;
   fixed_cost_per_session: number;
@@ -97,6 +98,15 @@ export default function SettingsPage() {
         <p className="text-xs text-zinc-400">
           Mẹo: thêm bot vào nhóm rồi gõ lệnh <code>/getid</code> trong nhóm đó để lấy Chat ID.
         </p>
+        <LabeledInput
+          label="Username bot Telegram"
+          value={settings.bot_username ?? ""}
+          onChange={(v) => setSettings({ ...settings, bot_username: v })}
+        />
+        <p className="text-xs text-zinc-400">
+          Lấy từ @BotFather, không kèm ký tự @. Dùng để dựng link điểm danh gửi vào nhóm — thiếu
+          thông tin này thì không gửi được thông báo điểm danh.
+        </p>
       </section>
 
       <section className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4">
@@ -147,7 +157,7 @@ export default function SettingsPage() {
           + Thêm lịch tập
         </button>
         <p className="text-xs text-zinc-400">
-          Cron sẽ tự tạo buổi tập & gửi poll dựa theo lịch này (khi đã bật cron ngoài, xem README).
+          Cron sẽ tự tạo buổi tập & gửi thông báo điểm danh dựa theo lịch này (khi đã bật cron ngoài, xem README).
           Số lượng tham gia ở trên dùng làm mốc &quot;đủ/thiếu người&quot; và số người tối thiểu mặc
           định cho buổi được tự tạo. Chi phí cố định được cộng thêm vào chi phí vật phẩm của mỗi
           buổi khi tính sao kê.
@@ -157,7 +167,7 @@ export default function SettingsPage() {
       <section className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4">
         <h2 className="text-sm font-semibold text-zinc-700">Mốc thời gian tự động</h2>
         <LabeledInput
-          label="Gửi poll trước giờ tập bao nhiêu tiếng"
+          label="Gửi thông báo điểm danh trước giờ tập bao nhiêu tiếng"
           type="number"
           value={settings.reminder_hours_before}
           onChange={(v) => setSettings({ ...settings, reminder_hours_before: Number(v) })}

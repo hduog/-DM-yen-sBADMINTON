@@ -167,10 +167,10 @@ export default async function DashboardHome() {
   const statusRespondedCount = statusPresentCount + statusAbsentCount;
   const statusNoResponseCount = Math.max(totalMembers - statusRespondedCount, 0);
 
-  const statusPollStartAt = statusSession ? combineVNDateTime(statusSession.date, statusSession.start_time) : null;
-  const statusPollDueAt =
-    statusSession && !statusSession.poll_sent_at
-      ? new Date(statusPollStartAt!.getTime() - settings.reminder_hours_before * 60 * 60 * 1000)
+  const statusNoticeStartAt = statusSession ? combineVNDateTime(statusSession.date, statusSession.start_time) : null;
+  const statusNoticeDueAt =
+    statusSession && !statusSession.notify_sent_at
+      ? new Date(statusNoticeStartAt!.getTime() - settings.reminder_hours_before * 60 * 60 * 1000)
       : null;
 
   // Nếu chưa có Session thật nào (cron chưa tạo), vẫn hiển thị buổi gần nhất suy ra từ lịch để biết "sắp diễn ra".
@@ -242,9 +242,9 @@ export default async function DashboardHome() {
           </div>
 
           <p className="mt-2 text-xs text-zinc-500">
-            {statusSession.poll_sent_at
-              ? `Đã gửi thông báo điểm danh lúc ${formatVNDateTime(statusSession.poll_sent_at)}`
-              : `Chưa gửi thông báo điểm danh (dự kiến gửi lúc ${formatVNDateTime(statusPollDueAt!)})`}
+            {statusSession.notify_sent_at
+              ? `Đã gửi thông báo điểm danh lúc ${formatVNDateTime(statusSession.notify_sent_at)}`
+              : `Chưa gửi thông báo điểm danh (dự kiến gửi lúc ${formatVNDateTime(statusNoticeDueAt!)})`}
           </p>
         </section>
       ) : (

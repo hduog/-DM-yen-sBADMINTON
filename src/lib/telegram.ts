@@ -23,27 +23,10 @@ export function sendMessage(
   text: string,
   options: Record<string, unknown> = {}
 ) {
-  return callApi("sendMessage", {
+  return callApi<{ message_id: number }>("sendMessage", {
     chat_id: chatId,
     text,
     parse_mode: "HTML",
-    ...options,
-  });
-}
-
-export function sendPoll(
-  chatId: number | string,
-  question: string,
-  answerOptions: string[],
-  options: Record<string, unknown> = {}
-) {
-  // is_anonymous PHẢI là false để nhận được sự kiện poll_answer — xem mục 1.5 thiết kế
-  return callApi<{ message_id: number; poll: { id: string } }>("sendPoll", {
-    chat_id: chatId,
-    question,
-    options: answerOptions,
-    is_anonymous: false,
-    allows_multiple_answers: false,
     ...options,
   });
 }
@@ -58,15 +41,11 @@ export function answerCallbackQuery(
   });
 }
 
-export function stopPoll(chatId: number | string, messageId: number) {
-  return callApi("stopPoll", { chat_id: chatId, message_id: messageId });
-}
-
 export function setWebhook(url: string, secretToken?: string) {
   return callApi("setWebhook", {
     url,
     ...(secretToken ? { secret_token: secretToken } : {}),
-    allowed_updates: ["message", "poll_answer", "callback_query"],
+    allowed_updates: ["message", "callback_query"],
   });
 }
 

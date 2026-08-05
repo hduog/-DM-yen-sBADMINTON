@@ -9,7 +9,7 @@ type SessionItem = {
   end_time: string;
   min_required: number;
   status: string;
-  poll_sent_at?: string;
+  notify_sent_at?: string;
   need_recruit?: boolean;
   recruit_count_needed?: number;
   notes?: string;
@@ -46,13 +46,13 @@ export default function AttendancePage() {
     load();
   }
 
-  async function handleSendPoll(id: string) {
+  async function handleSendNotice(id: string) {
     setBusyId(id);
-    const res = await fetch(`/api/sessions/${id}/send-poll`, { method: "POST" });
+    const res = await fetch(`/api/sessions/${id}/send-notice`, { method: "POST" });
     setBusyId(null);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      alert(data.error ?? "Gửi poll thất bại");
+      alert(data.error ?? "Gửi thông báo thất bại");
       return;
     }
     load();
@@ -123,11 +123,11 @@ export default function AttendancePage() {
             )}
             <div className="mt-3 flex gap-2">
               <button
-                disabled={!!s.poll_sent_at || busyId === s._id}
-                onClick={() => handleSendPoll(s._id)}
+                disabled={!!s.notify_sent_at || busyId === s._id}
+                onClick={() => handleSendNotice(s._id)}
                 className="rounded border border-zinc-300 px-3 py-1.5 text-xs font-medium disabled:opacity-40"
               >
-                {s.poll_sent_at ? "Đã gửi poll" : "Gửi poll điểm danh"}
+                {s.notify_sent_at ? "Đã gửi thông báo" : "Gửi thông báo điểm danh"}
               </button>
               <button
                 onClick={() => setExpandedId(expandedId === s._id ? null : s._id)}
@@ -156,7 +156,13 @@ const ANSWER_STYLE: Record<string, string> = {
   no_response: "bg-zinc-100 text-zinc-500",
 };
 
-type AttendanceEntry = { member_id: string; full_name: string; username?: string; answer: string };
+type AttendanceEntry = {
+  member_id: string;
+  full_name: string;
+  username?: string;
+  answer: string;
+  reason?: string;
+};
 type AttendanceDetail = {
   list: AttendanceEntry[];
   presentCount: number;
@@ -230,9 +236,14 @@ function SessionDetail({ session, onChanged }: { session: SessionItem; onChanged
               {attendance.list.map((m) => (
                 <div key={m.member_id} className="flex items-center justify-between text-sm">
                   <span>{m.full_name}</span>
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${ANSWER_STYLE[m.answer]}`}>
-                    {ANSWER_LABEL[m.answer] ?? m.answer}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {m.answer === "absent" && m.reason && (
+                      <span className="text-xs text-zinc-400">{m.reason}</span>
+                    )}
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${ANSWER_STYLE[m.answer]}`}>
+                      {ANSWER_LABEL[m.answer] ?? m.answer}
+                    </span>
+                  </div>
                 </div>
               ))}
             </div>
