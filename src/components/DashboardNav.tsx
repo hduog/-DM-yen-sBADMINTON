@@ -49,7 +49,7 @@ const TABS: { href: string; label: string; icon: (active: boolean) => ReactNode 
   },
   {
     href: "/dashboard/recruit",
-    label: "Tuyển vãng lai",
+    label: "Vãng lai",
     icon: (active) => (
       <svg viewBox="0 0 24 24" fill="none" strokeWidth={active ? 2.25 : 1.75} stroke="currentColor" className="h-5 w-5">
         <circle cx="9.5" cy="8" r="3" />

@@ -4,6 +4,7 @@ import { Attendance, ItemConfig, Session, SessionCost } from "@/lib/models";
 import { getSettings } from "@/lib/models/Settings";
 import { requireAdmin } from "@/lib/auth-guard";
 import { sendMessage } from "@/lib/telegram";
+import { getSessionCostUnits } from "@/lib/session-actions";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const admin = await requireAdmin();
@@ -12,10 +13,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const { id } = await params;
   await connectDB();
 
-  const [costs, items, presentCount, settings] = await Promise.all([
+  const [costs, items, presentCount, { totalUnits }, settings] = await Promise.all([
     SessionCost.find({ session_id: id }).populate("item_id", "name unit unit_price"),
     ItemConfig.find().sort({ name: 1 }),
     Attendance.countDocuments({ session_id: id, answer: "present" }),
+    getSessionCostUnits(id),
     getSettings(),
   ]);
 
@@ -25,9 +27,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     costs,
     items,
     presentCount,
+    totalUnits,
     fixedCost: settings.fixed_cost_per_session ?? 0,
     total,
-    perPerson: presentCount > 0 ? Math.round(total / presentCount) : 0,
+    perPerson: totalUnits > 0 ? Math.round(total / totalUnits) : 0,
   });
 }
 
@@ -63,15 +66,18 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     );
   }
 
-  const presentCount = await Attendance.countDocuments({ session_id: id, answer: "present" });
-  const perPerson = presentCount > 0 ? Math.round(total / presentCount) : 0;
+  const [presentCount, { totalUnits }] = await Promise.all([
+    Attendance.countDocuments({ session_id: id, answer: "present" }),
+    getSessionCostUnits(id),
+  ]);
+  const perPerson = totalUnits > 0 ? Math.round(total / totalUnits) : 0;
 
   if (settings.admin_group_chat_id) {
     await sendMessage(
       settings.admin_group_chat_id,
-      `🧾 Chi phí buổi tập ${session.start_time}-${session.end_time} ngày ${session.date.toLocaleDateString("vi-VN")}: <b>${total.toLocaleString("vi-VN")}đ</b> (${presentCount} người có mặt, ${perPerson.toLocaleString("vi-VN")}đ/người).`
+      `🧾 Chi phí buổi tập ${session.start_time}-${session.end_time} ngày ${session.date.toLocaleDateString("vi-VN")}: <b>${total.toLocaleString("vi-VN")}đ</b> (${totalUnits} suất, ${perPerson.toLocaleString("vi-VN")}đ/suất).`
     );
   }
 
-  return NextResponse.json({ ok: true, total, perPerson, presentCount });
+  return NextResponse.json({ ok: true, total, perPerson, presentCount, totalUnits });
 }

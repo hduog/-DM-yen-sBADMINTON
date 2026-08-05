@@ -2,7 +2,7 @@ import Link from "next/link";
 import { connectDB } from "@/lib/mongodb";
 import { Attendance, Member, MonthlyStatement, Session, SessionCost } from "@/lib/models";
 import { getSettings } from "@/lib/models/Settings";
-import { combineVNDateTime, shiftMonth, vnNow } from "@/lib/session-actions";
+import { combineVNDateTime, getSessionCostUnits, shiftMonth, vnNow } from "@/lib/session-actions";
 
 const WEEKDAY_LABEL = ["Chủ nhật", "Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7"];
 
@@ -158,14 +158,17 @@ export default async function DashboardHome() {
 
   // Buổi tập cần hiển thị trạng thái điểm danh: ưu tiên buổi đang diễn ra, nếu không thì buổi sắp tới gần nhất.
   const statusSession = ongoing ?? nextSession;
-  const [statusPresentCount, statusAbsentCount] = statusSession
+  const [statusPresentCount, statusAbsentCount, statusCostUnits] = statusSession
     ? await Promise.all([
         Attendance.countDocuments({ session_id: statusSession._id, answer: "present" }),
         Attendance.countDocuments({ session_id: statusSession._id, answer: "absent" }),
+        getSessionCostUnits(statusSession._id.toString()),
       ])
-    : [0, 0];
+    : [0, 0, { totalUnits: 0 }];
   const statusRespondedCount = statusPresentCount + statusAbsentCount;
   const statusNoResponseCount = Math.max(totalMembers - statusRespondedCount, 0);
+  // Số lượng tham gia thật của buổi tập tính cả khách vãng lai, không chỉ member điểm danh "Có".
+  const statusHeadcount = statusCostUnits.totalUnits;
 
   const statusNoticeStartAt = statusSession ? combineVNDateTime(statusSession.date, statusSession.start_time) : null;
   const statusNoticeDueAt =
@@ -232,7 +235,11 @@ export default async function DashboardHome() {
 
           <div className="mt-3 flex flex-col gap-1 text-sm">
             <p>
-              Đã điểm danh: <span className="font-semibold">{statusRespondedCount}</span>/{totalMembers}
+              Số lượng tham gia: <span className="font-semibold">{statusHeadcount}</span>/
+              {statusSession.min_required}
+              {statusHeadcount > statusPresentCount && (
+                <span className="text-xs text-zinc-400"> (gồm {statusHeadcount - statusPresentCount} khách vãng lai)</span>
+              )}
             </p>
             <p className="text-zinc-600">
               Có mặt: <span className="font-medium text-emerald-700">{statusPresentCount}</span> · Vắng:{" "}

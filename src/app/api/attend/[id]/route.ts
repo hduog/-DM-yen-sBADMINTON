@@ -3,7 +3,7 @@ import { connectDB } from "@/lib/mongodb";
 import { Session } from "@/lib/models";
 import { getSettings } from "@/lib/models/Settings";
 import { requireActiveMember } from "@/lib/auth-guard";
-import { getSessionAttendanceDetail, recordAttendanceVote } from "@/lib/session-actions";
+import { getSessionAttendanceDetail, getSessionCostUnits, recordAttendanceVote } from "@/lib/session-actions";
 
 // Dùng bởi trang /attend/[id] — thay cho vote qua Telegram poll. Cho phép cả admin lẫn member
 // thường (requireActiveMember), không phải requireAdmin.
@@ -17,7 +17,10 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const session = await Session.findById(id);
   if (!session) return NextResponse.json({ error: "Không tìm thấy buổi tập" }, { status: 404 });
 
-  const detail = await getSessionAttendanceDetail(id);
+  const [detail, { totalUnits }] = await Promise.all([
+    getSessionAttendanceDetail(id),
+    getSessionCostUnits(id),
+  ]);
   return NextResponse.json({
     session: {
       _id: session._id,
@@ -28,6 +31,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       status: session.status,
     },
     ...detail,
+    totalUnits,
     viewerMemberId: member._id.toString(),
   });
 }

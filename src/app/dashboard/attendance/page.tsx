@@ -13,6 +13,7 @@ type SessionItem = {
   need_recruit?: boolean;
   recruit_count_needed?: number;
   notes?: string;
+  cost_settled_at?: string;
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -27,6 +28,7 @@ export default function AttendancePage() {
   const [form, setForm] = useState({ date: "", start_time: "18:30", end_time: "20:00", min_required: 8 });
   const [busyId, setBusyId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [showCreateForm, setShowCreateForm] = useState(false);
 
   function load() {
     fetch("/api/sessions")
@@ -44,6 +46,7 @@ export default function AttendancePage() {
       body: JSON.stringify(form),
     });
     load();
+    setShowCreateForm(false);
   }
 
   async function handleSendNotice(id: string) {
@@ -60,44 +63,55 @@ export default function AttendancePage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <form onSubmit={handleCreate} className="flex flex-col gap-2 rounded-xl border border-zinc-200 bg-white p-4">
-        <h2 className="text-sm font-semibold text-zinc-700">Tạo buổi tập mới</h2>
-        <div className="grid grid-cols-2 gap-2">
-          <input
-            type="date"
-            required
-            value={form.date}
-            onChange={(e) => setForm({ ...form, date: e.target.value })}
-            className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
-          />
-          <input
-            type="number"
-            min={1}
-            required
-            value={form.min_required}
-            onChange={(e) => setForm({ ...form, min_required: Number(e.target.value) })}
-            placeholder="Số người tối thiểu"
-            className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
-          />
-          <input
-            type="time"
-            required
-            value={form.start_time}
-            onChange={(e) => setForm({ ...form, start_time: e.target.value })}
-            className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
-          />
-          <input
-            type="time"
-            required
-            value={form.end_time}
-            onChange={(e) => setForm({ ...form, end_time: e.target.value })}
-            className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
-          />
-        </div>
-        <button className="mt-1 rounded bg-zinc-900 py-2 text-sm font-medium text-white">
-          Tạo buổi tập
+      <div className="rounded-xl border border-zinc-200 bg-white p-4">
+        <button
+          type="button"
+          onClick={() => setShowCreateForm((v) => !v)}
+          className="flex w-full items-center justify-between text-sm font-semibold text-zinc-700"
+        >
+          Tạo buổi tập thêm
+          <span className="text-xs font-normal text-zinc-400">{showCreateForm ? "Thu gọn ▲" : "Mở rộng ▼"}</span>
         </button>
-      </form>
+        {showCreateForm && (
+          <form onSubmit={handleCreate} className="mt-3 flex flex-col gap-2">
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="date"
+                required
+                value={form.date}
+                onChange={(e) => setForm({ ...form, date: e.target.value })}
+                className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
+              />
+              <input
+                type="number"
+                min={1}
+                required
+                value={form.min_required}
+                onChange={(e) => setForm({ ...form, min_required: Number(e.target.value) })}
+                placeholder="Số người tối thiểu"
+                className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
+              />
+              <input
+                type="time"
+                required
+                value={form.start_time}
+                onChange={(e) => setForm({ ...form, start_time: e.target.value })}
+                className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
+              />
+              <input
+                type="time"
+                required
+                value={form.end_time}
+                onChange={(e) => setForm({ ...form, end_time: e.target.value })}
+                className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
+              />
+            </div>
+            <button className="mt-1 rounded bg-zinc-900 py-2 text-sm font-medium text-white">
+              Tạo buổi tập
+            </button>
+          </form>
+        )}
+      </div>
 
       <div className="flex flex-col gap-3">
         {sessions === null && <p className="text-sm text-zinc-400">Đang tải...</p>}
@@ -176,7 +190,10 @@ function SessionDetail({ session, onChanged }: { session: SessionItem; onChanged
   const [savingNotes, setSavingNotes] = useState(false);
   const [reminding, setReminding] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [passingCourt, setPassingCourt] = useState(false);
+  const [settling, setSettling] = useState(false);
   const isCancelled = session.status === "cancelled";
+  const isSettled = !!session.cost_settled_at;
 
   useEffect(() => {
     fetch(`/api/sessions/${session._id}/attendance`)
@@ -221,6 +238,29 @@ function SessionDetail({ session, onChanged }: { session: SessionItem; onChanged
     onChanged();
   }
 
+  async function handlePassCourt() {
+    setPassingCourt(true);
+    const res = await fetch(`/api/sessions/${session._id}/pass-court`, { method: "POST" });
+    setPassingCourt(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error ?? "Gửi thông báo pass sân thất bại");
+    }
+  }
+
+  async function handleSettle() {
+    if (!window.confirm("Xác nhận quyết toán chi phí buổi tập này vào sao kê?")) return;
+    setSettling(true);
+    const res = await fetch(`/api/sessions/${session._id}/settle`, { method: "POST" });
+    setSettling(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error ?? "Quyết toán thất bại");
+      return;
+    }
+    onChanged();
+  }
+
   return (
     <div className="mt-3 flex flex-col gap-3">
       <div className="rounded-lg bg-zinc-50 p-3">
@@ -251,7 +291,17 @@ function SessionDetail({ session, onChanged }: { session: SessionItem; onChanged
         )}
       </div>
 
+      <GuestForm sessionId={session._id} />
+
       <CostForm sessionId={session._id} />
+
+      <button
+        onClick={handleSettle}
+        disabled={settling || isSettled || isCancelled}
+        className="rounded border border-zinc-300 px-3 py-1.5 text-xs font-medium disabled:opacity-40"
+      >
+        {isSettled ? "Đã quyết toán" : settling ? "Đang quyết toán..." : "Quyết toán"}
+      </button>
 
       <div className="rounded-lg bg-zinc-50 p-3">
         <h3 className="mb-2 text-xs font-semibold text-zinc-700">Ghi chú</h3>
@@ -271,13 +321,20 @@ function SessionDetail({ session, onChanged }: { session: SessionItem; onChanged
         </button>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <button
           onClick={handleRemind}
           disabled={reminding || isCancelled}
           className="rounded border border-zinc-300 px-3 py-1.5 text-xs font-medium disabled:opacity-40"
         >
           Nhắc điểm danh
+        </button>
+        <button
+          onClick={handlePassCourt}
+          disabled={passingCourt}
+          className="rounded border border-zinc-300 px-3 py-1.5 text-xs font-medium disabled:opacity-40"
+        >
+          {passingCourt ? "Đang gửi..." : "Pass sân"}
         </button>
         <button
           onClick={handleCancel}
@@ -291,11 +348,125 @@ function SessionDetail({ session, onChanged }: { session: SessionItem; onChanged
   );
 }
 
+type MemberOption = { _id: string; full_name: string };
+
+type GuestEntry = {
+  _id: string;
+  guest_name?: string;
+  quantity: number;
+  responsible_member_id: { _id: string; full_name: string } | null;
+};
+
+function GuestForm({ sessionId }: { sessionId: string }) {
+  const [guests, setGuests] = useState<GuestEntry[] | null>(null);
+  const [members, setMembers] = useState<MemberOption[]>([]);
+  const [form, setForm] = useState({ guest_name: "", quantity: 1, responsible_member_id: "" });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  function load() {
+    fetch(`/api/sessions/${sessionId}/guests`)
+      .then((r) => r.json())
+      .then(setGuests);
+  }
+
+  useEffect(load, [sessionId]);
+  useEffect(() => {
+    fetch("/api/members")
+      .then((r) => r.json())
+      .then(setMembers);
+  }, []);
+
+  async function handleAdd(e: React.FormEvent) {
+    e.preventDefault();
+    if (!form.responsible_member_id) {
+      setError("Vui lòng chọn người chịu trách nhiệm");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    const res = await fetch(`/api/sessions/${sessionId}/guests`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    });
+    const resData = await res.json().catch(() => ({}));
+    setSaving(false);
+    if (!res.ok) {
+      setError(resData.error ?? "Thêm khách vãng lai thất bại");
+      return;
+    }
+    setForm({ guest_name: "", quantity: 1, responsible_member_id: "" });
+    load();
+  }
+
+  async function handleDelete(guestId: string) {
+    await fetch(`/api/sessions/${sessionId}/guests/${guestId}`, { method: "DELETE" });
+    load();
+  }
+
+  return (
+    <div className="rounded-lg bg-zinc-50 p-3">
+      <h3 className="mb-2 text-xs font-semibold text-zinc-700">Khách vãng lai</h3>
+      {guests === null && <p className="text-xs text-zinc-400">Đang tải...</p>}
+      {guests?.length === 0 && <p className="text-xs text-zinc-400">Chưa có khách vãng lai.</p>}
+      {guests && guests.length > 0 && (
+        <div className="mb-2 flex flex-col gap-1">
+          {guests.map((g) => (
+            <div key={g._id} className="flex items-center justify-between text-sm">
+              <span>
+                {g.guest_name || "(không tên)"} × {g.quantity} — {g.responsible_member_id?.full_name ?? "(đã xoá)"}
+              </span>
+              <button onClick={() => handleDelete(g._id)} className="text-xs text-red-500">
+                Xoá
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <form onSubmit={handleAdd} className="flex flex-wrap items-end gap-2">
+        <input
+          type="text"
+          placeholder="Tên/ghi chú (tuỳ chọn)"
+          value={form.guest_name}
+          onChange={(e) => setForm({ ...form, guest_name: e.target.value })}
+          className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
+        />
+        <input
+          type="number"
+          min={1}
+          value={form.quantity}
+          onChange={(e) => setForm({ ...form, quantity: Number(e.target.value) })}
+          className="w-20 rounded border border-zinc-300 px-2 py-1.5 text-sm"
+        />
+        <select
+          value={form.responsible_member_id}
+          onChange={(e) => setForm({ ...form, responsible_member_id: e.target.value })}
+          className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
+        >
+          <option value="">Người chịu trách nhiệm</option>
+          {members.map((m) => (
+            <option key={m._id} value={m._id}>
+              {m.full_name}
+            </option>
+          ))}
+        </select>
+        <button disabled={saving} className="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium disabled:opacity-40">
+          + Thêm
+        </button>
+      </form>
+      {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
+    </div>
+  );
+}
+
 type ItemConfigItem = { _id: string; name: string; unit: string; unit_price: number };
 type CostSummary = {
   costs: { item_id: { _id: string }; quantity: number }[];
   items: ItemConfigItem[];
   presentCount: number;
+  totalUnits: number;
   fixedCost: number;
   total: number;
   perPerson: number;
@@ -329,7 +500,17 @@ function CostForm({ sessionId }: { sessionId: string }) {
     });
     const summary = await res.json();
     setSaving(false);
-    setData((prev) => (prev ? { ...prev, total: summary.total, perPerson: summary.perPerson, presentCount: summary.presentCount } : prev));
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            total: summary.total,
+            perPerson: summary.perPerson,
+            presentCount: summary.presentCount,
+            totalUnits: summary.totalUnits,
+          }
+        : prev
+    );
   }
 
   if (!data) return <p className="text-xs text-zinc-400">Đang tải...</p>;
@@ -364,8 +545,9 @@ function CostForm({ sessionId }: { sessionId: string }) {
       ))}
       <div className="mt-2 flex items-center justify-between border-t border-zinc-200 pt-2 text-sm">
         <span>
-          Tổng: <b>{data.total.toLocaleString("vi-VN")}đ</b> · {data.presentCount} người có mặt ·{" "}
-          <b>{data.perPerson.toLocaleString("vi-VN")}đ</b>/người
+          Tổng: <b>{data.total.toLocaleString("vi-VN")}đ</b> · {data.presentCount} thành viên có mặt
+          {data.totalUnits > data.presentCount && ` + ${data.totalUnits - data.presentCount} khách vãng lai`} ={" "}
+          {data.totalUnits} người · <b>{data.perPerson.toLocaleString("vi-VN")}đ</b>/người
         </span>
         <button
           onClick={handleSave}

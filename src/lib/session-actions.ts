@@ -1,4 +1,12 @@
-import { Attendance, Member, MonthlyStatement, Session, SessionCost } from "@/lib/models";
+import {
+  Attendance,
+  Member,
+  MonthlyStatement,
+  Session,
+  SessionCost,
+  SessionGuest,
+  SessionMemberCost,
+} from "@/lib/models";
 import type { SettingsDoc } from "@/lib/models/Settings";
 import { sendMessage } from "@/lib/telegram";
 import type { HydratedDocument } from "mongoose";
@@ -40,6 +48,7 @@ type SessionDocT = HydratedDocument<{
   notify_sent_at?: Date;
   confirmation_sent_at?: Date;
   cost_reminder_sent_at?: Date;
+  cost_settled_at?: Date;
   need_recruit?: boolean;
   recruit_count_needed?: number;
 }>;
@@ -95,7 +104,7 @@ export async function runAttendanceJobIfDue(entry: WeeklyScheduleEntryT, setting
 // điểm danh và API nhắc điểm danh.
 export async function getSessionAttendanceDetail(sessionId: string) {
   const [members, attendances] = await Promise.all([
-    Member.find({ status: "active", del_flag: false }).sort({ full_name: 1 }),
+    Member.find({ status: "active", del_flag: { $ne: true } }).sort({ full_name: 1 }),
     Attendance.find({ session_id: sessionId }),
   ]);
 
@@ -155,7 +164,7 @@ export async function recordAttendanceVote(
   answer: "present" | "absent",
   reason: string | undefined,
   settings: SettingsDocT
-): Promise<AttendanceDetailT> {
+): Promise<AttendanceDetailT & { totalUnits: number }> {
   await Attendance.findOneAndUpdate(
     { session_id: session._id, member_id: member._id },
     answer === "absent"
@@ -164,64 +173,68 @@ export async function recordAttendanceVote(
     { upsert: true }
   );
 
-  const detail = await getSessionAttendanceDetail(session._id.toString());
-  await announceVoteToGroup(session, member, answer, reason, detail, settings);
-
-  if (
-    answer === "present" &&
-    session.status === "scheduled" &&
-    detail.presentCount >= session.min_required
-  ) {
-    await announceQuotaReached(session, settings, detail.presentCount);
-  }
-
-  return detail;
-}
-
-// Thông báo cập nhật vào nhóm sau MỌI lượt vote (cả tham gia lẫn không tham gia) — mời các thành
-// viên còn "no_response" bấm lại đúng link để bình chọn.
-async function announceVoteToGroup(
-  session: SessionDocT,
-  member: MemberDocT,
-  answer: "present" | "absent",
-  reason: string | undefined,
-  detail: AttendanceDetailT,
-  settings: SettingsDocT
-) {
-  if (!settings.main_group_chat_id) return;
-
   const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
-  const otherPresentNames = detail.list
-    .filter((m) => m.answer === "present" && m.member_id !== member._id.toString())
-    .map((m) => m.full_name);
-  const noResponseNames = detail.list.filter((m) => m.answer === "no_response").map((m) => m.full_name);
-
-  const lines: string[] = [];
-  if (answer === "present") {
-    lines.push(`✅ <b>${member.full_name}</b> đã xác nhận <b>tham gia</b> buổi tập ${dateLabel}.`);
-    if (otherPresentNames.length > 0) lines.push(`Cùng với: ${otherPresentNames.join(", ")}.`);
-  } else {
-    lines.push(`❌ <b>${member.full_name}</b> đã xác nhận <b>không tham gia</b> buổi tập ${dateLabel}.`);
-    lines.push(`Lý do: ${reason}`);
-  }
-  lines.push(`Đã có <b>${detail.presentCount}/${session.min_required}</b> người tham gia.`);
-  if (noResponseNames.length > 0) lines.push(`Mời ${noResponseNames.join(", ")} vào bình chọn.`);
-
-  const deepLink = buildAttendDeepLink(session._id.toString(), settings);
-  await sendMessage(settings.main_group_chat_id, lines.join("\n"), {
-    reply_markup: deepLink ? { inline_keyboard: [[{ text: "Điểm danh ngay", url: deepLink }]] } : undefined,
+  const { detail, costUnits } = await announceAttendanceChange(session, settings, (detail) => {
+    if (answer === "present") {
+      const otherPresentNames = detail.list
+        .filter((m) => m.answer === "present" && m.member_id !== member._id.toString())
+        .map((m) => m.full_name);
+      return [
+        `✅ <b>${member.full_name}</b> đã xác nhận <b>tham gia</b> buổi tập ${dateLabel}.`,
+        ...(otherPresentNames.length > 0 ? [`Cùng với: ${otherPresentNames.join(", ")}.`] : []),
+      ];
+    }
+    return [
+      `❌ <b>${member.full_name}</b> đã xác nhận <b>không tham gia</b> buổi tập ${dateLabel}.`,
+      `Lý do: ${reason}`,
+    ];
   });
+
+  return { ...detail, totalUnits: costUnits.totalUnits };
 }
 
-// Chốt đủ người ngay khi vote "Có" vừa chạm mốc min_required, thay vì đợi mốc T-5h
-// (reconcileDueAttendance chỉ còn lo nhánh thiếu người).
-async function announceQuotaReached(session: SessionDocT, settings: SettingsDocT, presentCount: number) {
+// Thông báo cập nhật vào nhóm dùng chung cho MỌI thay đổi ảnh hưởng số lượng tham gia — vote của
+// thành viên (recordAttendanceVote) lẫn thêm/xoá khách vãng lai (/api/sessions/[id]/guests). Số
+// lượng hiển thị ("Đã có X/Y") LUÔN tính cả khách vãng lai (getSessionCostUnits), không chỉ member
+// điểm danh "Có" — vì khách vãng lai cũng là người thật tham gia buổi tập. Tự chốt "đủ người" nếu
+// mốc này vừa đạt min_required trong khi session còn "scheduled".
+export async function announceAttendanceChange(
+  session: SessionDocT,
+  settings: SettingsDocT,
+  buildHeadline: (detail: AttendanceDetailT) => string[]
+): Promise<{ detail: AttendanceDetailT; costUnits: Awaited<ReturnType<typeof getSessionCostUnits>> }> {
+  const [detail, costUnits] = await Promise.all([
+    getSessionAttendanceDetail(session._id.toString()),
+    getSessionCostUnits(session._id.toString()),
+  ]);
+
+  if (settings.main_group_chat_id) {
+    const noResponseNames = detail.list.filter((m) => m.answer === "no_response").map((m) => m.full_name);
+    const footer = [`Đã có <b>${costUnits.totalUnits}/${session.min_required}</b> người tham gia.`];
+    if (noResponseNames.length > 0) footer.push(`Mời ${noResponseNames.join(", ")} vào bình chọn.`);
+
+    const deepLink = buildAttendDeepLink(session._id.toString(), settings);
+    await sendMessage(settings.main_group_chat_id, [...buildHeadline(detail), ...footer].join("\n"), {
+      reply_markup: deepLink ? { inline_keyboard: [[{ text: "Điểm danh ngay", url: deepLink }]] } : undefined,
+    });
+  }
+
+  if (session.status === "scheduled" && costUnits.totalUnits >= session.min_required) {
+    await announceQuotaReached(session, settings, costUnits.totalUnits);
+  }
+
+  return { detail, costUnits };
+}
+
+// Chốt đủ người ngay khi số lượng tham gia (thành viên + khách vãng lai) vừa chạm mốc
+// min_required, thay vì đợi mốc T-5h (reconcileDueAttendance chỉ còn lo nhánh thiếu người).
+async function announceQuotaReached(session: SessionDocT, settings: SettingsDocT, headcount: number) {
   session.status = "confirmed_enough";
   session.confirmation_sent_at = new Date();
   await session.save();
 
   const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
-  const text = `✅ Buổi tập ${dateLabel} đã đủ người (${presentCount}/${session.min_required}).`;
+  const text = `✅ Buổi tập ${dateLabel} đã đủ người (${headcount}/${session.min_required}).`;
   if (settings.main_group_chat_id) await sendMessage(settings.main_group_chat_id, text);
   if (settings.admin_group_chat_id) await sendMessage(settings.admin_group_chat_id, text);
 }
@@ -244,22 +257,19 @@ export async function reconcileDueAttendance(settings: SettingsDocT) {
     const dueAt = new Date(startAt.getTime() - CONFIRM_HOURS_BEFORE * 60 * 60 * 1000);
     if (now < dueAt) continue;
 
-    const presentCount = await Attendance.countDocuments({
-      session_id: session._id,
-      answer: "present",
-    });
+    const { totalUnits: headcount } = await getSessionCostUnits(session._id.toString());
 
     session.status = "confirmed_shortage";
     session.confirmation_sent_at = now;
     session.need_recruit = true;
-    session.recruit_count_needed = Math.max(session.min_required - presentCount, 0);
+    session.recruit_count_needed = Math.max(session.min_required - headcount, 0);
     await session.save();
 
     if (settings.admin_group_chat_id) {
       const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
       await sendMessage(
         settings.admin_group_chat_id,
-        `⚠️ Buổi tập ${dateLabel} đang thiếu người (${presentCount}/${session.min_required}, cần tuyển thêm ${session.recruit_count_needed}). Vào Mini App để tạo bài tuyển vãng lai.`
+        `⚠️ Buổi tập ${dateLabel} đang thiếu người (${headcount}/${session.min_required}, cần tuyển thêm ${session.recruit_count_needed}). Vào Mini App để tạo bài tuyển vãng lai.`
       );
     }
   }
@@ -289,13 +299,100 @@ export async function sendDueCostReminders(settings: SettingsDocT) {
   }
 }
 
+// Tính "suất" chi phí mỗi thành viên gánh trong 1 buổi tập: mỗi member có mặt = 1 suất, cộng
+// thêm số lượng khách vãng lai vào đúng người chịu trách nhiệm (dù người đó có mặt hay không —
+// xem SessionGuest.ts). Dùng chung cho preview real-time (/api/sessions/[id]/costs) và chốt sao
+// kê tháng thật (runDueMonthlySettlement) để tránh lệch logic giữa 2 nơi.
+export async function getSessionCostUnits(sessionId: string) {
+  const [presentAttendances, guests] = await Promise.all([
+    Attendance.find({ session_id: sessionId, answer: "present" }),
+    SessionGuest.find({ session_id: sessionId }),
+  ]);
+
+  const unitsByMember = new Map<string, number>();
+  for (const att of presentAttendances) {
+    const key = att.member_id.toString();
+    unitsByMember.set(key, (unitsByMember.get(key) ?? 0) + 1);
+  }
+  for (const guest of guests) {
+    const key = guest.responsible_member_id.toString();
+    unitsByMember.set(key, (unitsByMember.get(key) ?? 0) + guest.quantity);
+  }
+
+  let totalUnits = 0;
+  for (const units of unitsByMember.values()) totalUnits += units;
+
+  return { totalUnits, unitsByMember };
+}
+
+// Phân bổ chi phí 1 buổi tập vào MonthlyStatement — dùng chung cho nút "Quyết toán", tự động khi
+// huỷ buổi, và cron dọn nốt buổi bị bỏ sót cuối tháng (runDueMonthlySettlement). Idempotent qua
+// cost_settled_at: gọi lại trên buổi đã settle sẽ no-op (trả về null) để tránh cộng dồn 2 lần.
+export async function settleSessionCost(session: SessionDocT, settings: SettingsDocT) {
+  if (session.cost_settled_at) return null;
+
+  let total: number;
+  let unitsByMember: Map<string, number>;
+
+  if (session.status === "cancelled") {
+    // Buổi huỷ: không ai điểm danh được, chỉ tính chi phí cố định (VD tiền sân đã cọc không hoàn),
+    // chia đều cho TẤT CẢ thành viên active thay vì theo suất có mặt.
+    total = settings.fixed_cost_per_session ?? 0;
+    const activeMembers = await Member.find({ status: "active", del_flag: { $ne: true } });
+    unitsByMember = new Map(activeMembers.map((m) => [m._id.toString(), 1]));
+  } else {
+    const costs = await SessionCost.find({ session_id: session._id });
+    total = costs.reduce((sum, c) => sum + c.total_amount, 0) + (settings.fixed_cost_per_session ?? 0);
+    ({ unitsByMember } = await getSessionCostUnits(session._id.toString()));
+  }
+
+  let totalUnits = 0;
+  for (const units of unitsByMember.values()) totalUnits += units;
+
+  const month = `${session.date.getUTCFullYear()}-${String(session.date.getUTCMonth() + 1).padStart(2, "0")}`;
+  const shares = new Map<string, number>();
+
+  if (total > 0 && totalUnits > 0) {
+    const perUnit = total / totalUnits;
+    for (const [memberId, units] of unitsByMember) {
+      const amount = Math.round(perUnit * units);
+      if (amount <= 0) continue;
+      shares.set(memberId, amount);
+
+      await SessionMemberCost.findOneAndUpdate(
+        { session_id: session._id, member_id: memberId },
+        { session_id: session._id, member_id: memberId, amount, units },
+        { upsert: true }
+      );
+
+      // Không đụng vào sao kê đã báo đóng/đã duyệt — tránh sửa ngược 1 khoản đã xử lý xong.
+      const existingStatement = await MonthlyStatement.findOne({ member_id: memberId, month });
+      if (existingStatement && existingStatement.status !== "pending") continue;
+      await MonthlyStatement.findOneAndUpdate(
+        { member_id: memberId, month },
+        { $inc: { total_amount: amount, total_sessions: 1 }, $setOnInsert: { status: "pending" } },
+        { upsert: true }
+      );
+    }
+  }
+
+  session.cost_settled_at = new Date();
+  await session.save();
+
+  return { total, totalUnits, shares, month };
+}
+
 export function shiftMonth(monthStr: string, delta: number) {
   const [y, m] = monthStr.split("-").map(Number);
   const d = new Date(Date.UTC(y, m - 1 + delta, 1));
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-// Tổng hợp sao kê tháng trước vào đúng ngày settings.monthly_settlement_day — xem mục 5.3.
+// Chốt sao kê tháng trước vào đúng ngày settings.monthly_settlement_day. Tiền đã được tích luỹ
+// dần vào MonthlyStatement suốt tháng qua settleSessionCost (nút Quyết toán / tự động khi huỷ
+// buổi) — hàm này CHỈ còn 2 việc: (1) dọn nốt buổi nào trong tháng lỡ bị bỏ sót chưa quyết toán
+// (an toàn dự phòng), (2) gửi tin nhắn "sao kê tháng X" cho từng thành viên dựa trên số đã tích
+// luỹ sẵn — bước gửi tin này vẫn chỉ chạy đúng 1 lần/tháng như thiết kế cũ.
 export async function runDueMonthlySettlement(settings: SettingsDocT) {
   const today = vnNow();
   if (today.getUTCDate() !== settings.monthly_settlement_day) return;
@@ -309,57 +406,28 @@ export async function runDueMonthlySettlement(settings: SettingsDocT) {
   const monthStart = new Date(Date.UTC(ty, tm - 1, 1));
   const monthEnd = new Date(Date.UTC(ty, tm, 1));
 
-  const sessions = await Session.find({
+  const unsettledSessions = await Session.find({
     date: { $gte: monthStart, $lt: monthEnd },
-    status: { $in: ["confirmed_enough", "confirmed_shortage"] },
+    status: { $in: ["confirmed_enough", "confirmed_shortage", "cancelled"] },
+    cost_settled_at: { $exists: false },
   });
-
-  const memberTotals = new Map<string, { amount: number; sessionCount: number }>();
-
-  for (const session of sessions) {
-    const costs = await SessionCost.find({ session_id: session._id });
-    const sessionTotal = costs.reduce((sum, c) => sum + c.total_amount, 0) + (settings.fixed_cost_per_session ?? 0);
-    if (sessionTotal === 0) continue;
-
-    const presentAttendances = await Attendance.find({
-      session_id: session._id,
-      answer: "present",
-    });
-    if (presentAttendances.length === 0) continue;
-
-    const perPerson = sessionTotal / presentAttendances.length;
-    for (const att of presentAttendances) {
-      const key = att.member_id.toString();
-      const current = memberTotals.get(key) ?? { amount: 0, sessionCount: 0 };
-      current.amount += perPerson;
-      current.sessionCount += 1;
-      memberTotals.set(key, current);
-    }
+  for (const session of unsettledSessions) {
+    await settleSessionCost(session, settings);
   }
 
-  let totalClub = 0;
-  for (const [memberId, totals] of memberTotals) {
-    const member = await Member.findById(memberId);
-    if (!member) continue;
+  const statements = await MonthlyStatement.find({ month: targetMonth, total_amount: { $gt: 0 } });
 
-    const statement = await MonthlyStatement.findOneAndUpdate(
-      { member_id: memberId, month: targetMonth },
-      {
-        member_id: memberId,
-        month: targetMonth,
-        total_sessions: totals.sessionCount,
-        total_amount: Math.round(totals.amount),
-        status: "pending",
-      },
-      { upsert: true, new: true }
-    );
+  let totalClub = 0;
+  for (const statement of statements) {
+    const member = await Member.findById(statement.member_id);
+    if (!member) continue;
 
     totalClub += statement.total_amount;
 
     if (member.statement_chat_id) {
       await sendMessage(
         member.statement_chat_id,
-        `📄 <b>Sao kê tháng ${targetMonth}</b>\nSố buổi tham gia: ${totals.sessionCount}\nTổng tiền cần đóng: <b>${statement.total_amount.toLocaleString("vi-VN")}đ</b>`,
+        `📄 <b>Sao kê tháng ${targetMonth}</b>\nSố buổi tham gia: ${statement.total_sessions}\nTổng tiền cần đóng: <b>${statement.total_amount.toLocaleString("vi-VN")}đ</b>`,
         {
           reply_markup: {
             inline_keyboard: [
@@ -371,10 +439,10 @@ export async function runDueMonthlySettlement(settings: SettingsDocT) {
     }
   }
 
-  if (settings.admin_group_chat_id && memberTotals.size > 0) {
+  if (settings.admin_group_chat_id && statements.length > 0) {
     await sendMessage(
       settings.admin_group_chat_id,
-      `📊 Đã chốt sao kê tháng ${targetMonth}: ${memberTotals.size} thành viên, tổng ${totalClub.toLocaleString("vi-VN")}đ.`
+      `📊 Đã chốt sao kê tháng ${targetMonth}: ${statements.length} thành viên, tổng ${totalClub.toLocaleString("vi-VN")}đ.`
     );
   }
 

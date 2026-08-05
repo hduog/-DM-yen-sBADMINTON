@@ -8,7 +8,7 @@ export async function GET() {
   if (!admin) return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
 
   await connectDB();
-  const sessions = await Session.find().sort({ date: -1, start_time: -1 }).limit(50);
+  const sessions = await Session.find().sort({ date: 1, start_time: 1 }).limit(50);
   return NextResponse.json(sessions);
 }
 

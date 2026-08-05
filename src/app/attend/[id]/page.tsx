@@ -47,6 +47,7 @@ type AttendData = {
   presentCount: number;
   absentCount: number;
   noResponseCount: number;
+  totalUnits: number;
   viewerMemberId: string;
 };
 
@@ -133,7 +134,8 @@ export default function AttendSessionPage() {
           </span>
         </div>
         <p className="mt-1 text-xs text-zinc-500">
-          Đã có {data.presentCount}/{session.min_required} người tham gia
+          Đã có {data.totalUnits}/{session.min_required} người tham gia
+          {data.totalUnits > data.presentCount && ` (gồm ${data.totalUnits - data.presentCount} khách vãng lai)`}
         </p>
       </div>
 

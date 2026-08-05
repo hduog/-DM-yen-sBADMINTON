@@ -19,6 +19,9 @@ const SessionSchema = new Schema(
     notify_sent_at: { type: Date },
     confirmation_sent_at: { type: Date },
     cost_reminder_sent_at: { type: Date },
+    // Đã phân bổ chi phí buổi này vào MonthlyStatement chưa — chặn quyết toán/huỷ trùng lặp cộng
+    // dồn 2 lần, xem settleSessionCost() trong session-actions.ts.
+    cost_settled_at: { type: Date },
   },
   { timestamps: true }
 );
