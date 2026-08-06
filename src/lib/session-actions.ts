@@ -231,6 +231,8 @@ export async function announceAttendanceChange(
 
   if (session.status === "scheduled" && costUnits.totalUnits >= session.min_required) {
     await announceQuotaReached(session, settings, costUnits.totalUnits);
+  } else if (session.status === "confirmed_enough" && costUnits.totalUnits < session.min_required) {
+    await revertQuotaReached(session, settings, costUnits.totalUnits);
   }
 
   return { detail, costUnits };
@@ -247,6 +249,21 @@ async function announceQuotaReached(session: SessionDocT, settings: SettingsDocT
   const text = `✅ Buổi tập ${dateLabel} đã đủ người (${headcount}/${session.min_required}).`;
   if (settings.main_group_chat_id) await sendMessage(settings.main_group_chat_id, text);
   if (settings.admin_group_chat_id) await sendMessage(settings.admin_group_chat_id, text);
+}
+
+// Đối xứng với announceQuotaReached: mở lại buổi tập khi số lượng tụt xuống dưới min_required sau
+// khi đã confirmed_enough (VD ai đó /vang, /huy, hoặc bớt/xoá khách vãng lai) — nếu không, status
+// kẹt ở confirmed_enough mãi, khiến sessionFullMessage (webhook route.ts) chặn nhầm /thamgia,
+// /them1vanglai dù thực tế đang thiếu người. Xoá confirmation_sent_at để reconcileDueAttendance vẫn
+// xét được buổi này ở mốc T-5h nếu chưa đủ lại người.
+async function revertQuotaReached(session: SessionDocT, settings: SettingsDocT, headcount: number) {
+  session.status = "scheduled";
+  session.confirmation_sent_at = undefined;
+  await session.save();
+
+  const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
+  const text = `⚠️ Buổi tập ${dateLabel} không còn đủ người (${headcount}/${session.min_required}). Mời mọi người tiếp tục đăng ký.`;
+  if (settings.main_group_chat_id) await sendMessage(settings.main_group_chat_id, text);
 }
 
 const CONFIRM_HOURS_BEFORE = 5;
