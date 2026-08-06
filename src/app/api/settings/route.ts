@@ -2,8 +2,13 @@ import { NextResponse, type NextRequest } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import { getSettings } from "@/lib/models/Settings";
 import { requireAdmin } from "@/lib/auth-guard";
-import { syncAttendanceCronJobs } from "@/lib/cron-sync";
-import { runAttendanceJobIfDue, runSessionStartJobIfDue, runSettlementReminderJobIfDue } from "@/lib/session-actions";
+import { syncAttendanceCronJobs, syncMonthlySettlementCronJob } from "@/lib/cron-sync";
+import {
+  runAttendanceJobIfDue,
+  runDueMonthlySettlement,
+  runSessionStartJobIfDue,
+  runSettlementReminderJobIfDue,
+} from "@/lib/session-actions";
 
 export async function GET() {
   const admin = await requireAdmin();
@@ -73,6 +78,9 @@ export async function PUT(request: NextRequest) {
   const removedEntries = oldEntries.filter((e) => !newIds.has(e.id));
   const { warnings } = await syncAttendanceCronJobs(settings, removedEntries);
 
+  const { warnings: monthlyWarnings } = await syncMonthlySettlementCronJob(settings);
+  warnings.push(...monthlyWarnings);
+
   for (const entry of settings.weekly_schedule) {
     try {
       await runAttendanceJobIfDue(entry, settings);
@@ -89,6 +97,12 @@ export async function PUT(request: NextRequest) {
     } catch (err) {
       warnings.push(`Lỗi chạy bù job nhắc quyết toán cho lịch ${entry.start_time}: ${(err as Error).message}`);
     }
+  }
+
+  try {
+    await runDueMonthlySettlement(settings);
+  } catch (err) {
+    warnings.push(`Lỗi chạy bù chốt sao kê tháng: ${(err as Error).message}`);
   }
 
   return NextResponse.json({ ...settings.toObject(), warnings });

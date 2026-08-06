@@ -4,6 +4,10 @@ import type { HydratedDocument } from "mongoose";
 
 const WEEKDAY_LABEL = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
 const MINUTES_PER_WEEK = 7 * 24 * 60;
+// Giờ trong ngày chạy job chốt sao kê tháng (chưa có field cấu hình riêng cho giờ này, chỉ có
+// monthly_settlement_day) — chọn giờ hành chính buổi sáng thay vì đúng 00:00 để tin nhắn không
+// đến vào lúc nửa đêm.
+const MONTHLY_SETTLEMENT_HOUR = 8;
 
 // Tính mốc kích hoạt job = giờ tập trừ đi "reminder_hours_before" tiếng, biểu diễn lại thành
 // (thứ trong tuần, giờ, phút) để cấu hình schedule.wdays/hours/minutes của cron-job.org — xử lý
@@ -123,5 +127,54 @@ export async function syncAttendanceCronJobs(
   }
 
   await settings.save();
+  return { warnings };
+}
+
+// Đồng bộ job chốt sao kê tháng trên cron-job.org — KHÔNG theo từng lịch tập (weekly_schedule) mà
+// là 1 job global duy nhất, kích hoạt vào ngày settings.monthly_settlement_day mỗi tháng lúc
+// MONTHLY_SETTLEMENT_HOUR:00 giờ VN. Gọi sau mỗi lần lưu settings, cùng lúc với
+// syncAttendanceCronJobs. Không throw khi thiếu cấu hình hoặc lỗi API — trả về warnings.
+export async function syncMonthlySettlementCronJob(
+  settings: HydratedDocument<SettingsDoc>
+): Promise<{ warnings: string[] }> {
+  const warnings: string[] = [];
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  const cronSecret = process.env.CRON_SECRET;
+
+  if (!process.env.CRONJOB_API_KEY) {
+    warnings.push("Chưa cấu hình CRONJOB_API_KEY — bỏ qua đồng bộ job chốt sao kê tháng trên cron-job.org.");
+    return { warnings };
+  }
+  if (!appUrl || !cronSecret) {
+    warnings.push("Thiếu NEXT_PUBLIC_APP_URL hoặc CRON_SECRET — không thể đồng bộ job chốt sao kê tháng.");
+    return { warnings };
+  }
+
+  const spec = {
+    title: `[YenCLB] Chot sao ke thang (ngay ${settings.monthly_settlement_day})`,
+    url: `${appUrl}/api/cron/monthly-settlement`,
+    bearerSecret: cronSecret,
+    schedule: {
+      timezone: "Asia/Ho_Chi_Minh",
+      hours: [MONTHLY_SETTLEMENT_HOUR],
+      minutes: [0],
+      mdays: [settings.monthly_settlement_day],
+      months: [-1],
+      wdays: [-1],
+    },
+  };
+
+  try {
+    if (!settings.monthly_settlement_cronjob_id) {
+      settings.monthly_settlement_cronjob_id = await createCronJob(spec);
+    } else {
+      await updateCronJob(settings.monthly_settlement_cronjob_id, spec);
+    }
+    await settings.save();
+  } catch (err) {
+    warnings.push(`Lỗi đồng bộ job "${spec.title}": ${(err as Error).message}`);
+  }
+
   return { warnings };
 }

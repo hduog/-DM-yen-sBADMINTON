@@ -32,6 +32,9 @@ const SettingsSchema = new Schema(
     monthly_settlement_day: { type: Number, default: 1, min: 1, max: 28 },
     // Đánh dấu "YYYY-MM" đã chốt sao kê rồi, tránh cron chạy trùng — xem mục 6/11 thiết kế
     last_monthly_settlement_run: { type: String },
+    // id job chốt sao kê tháng trên cron-job.org (1 job global, không theo từng lịch tập) — kích
+    // hoạt vào ngày monthly_settlement_day mỗi tháng, xem /api/cron/monthly-settlement.
+    monthly_settlement_cronjob_id: { type: Number },
   },
   { timestamps: true }
 );

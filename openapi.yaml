@@ -334,11 +334,12 @@ paths:
       tags: [cron]
       summary: Tick scheduler — được cron ngoài gọi mỗi 1-5 phút
       description: >
-        Đọc settings + sessions trong DB, tự quyết định việc cần chạy: chốt thiếu người ở mốc
-        T-5h, báo "buổi tập đang diễn ra" vào nhóm chính lúc bắt đầu, nhắc quyết toán (kèm link
-        /settle/{id}) vào nhóm quản trị sau khi kết thúc, chốt sao kê tháng. Idempotent nhờ các
-        field *_sent_at / last_monthly_settlement_run. Việc tạo buổi tập + gửi poll điểm danh
-        không còn nằm ở đây — xem /api/cron/attendance/{entryId}.
+        Đọc settings + sessions trong DB, tự quyết định việc cần chạy: chỉ còn lo chốt thiếu người
+        ở mốc T-5h trước giờ tập (áp dụng cho mọi buổi đang chờ, không gắn với 1 lịch tập cụ thể).
+        Các việc còn lại (tạo buổi + gửi thông báo điểm danh, báo "đang diễn ra", nhắc quyết toán,
+        chốt sao kê tháng) đều có mốc giờ cố định riêng nên đã chuyển sang job cron-job.org riêng —
+        xem /api/cron/attendance/{entryId}, /session-start/{entryId}, /settlement-reminder/{entryId},
+        /monthly-settlement.
       security:
         - cronBearer: []
       responses:
@@ -468,6 +469,35 @@ paths:
           description: Sai hoặc thiếu CRON_SECRET
         "404":
           description: Không tìm thấy entryId trong weekly_schedule (job cũ, đã bị xoá)
+
+  /api/cron/monthly-settlement:
+    post:
+      tags: [cron]
+      summary: Job chốt sao kê tháng — 1 job global trên cron-job.org (không theo từng lịch tập)
+      description: >
+        Tự tạo/cập nhật khi lưu /api/settings (xem settings.monthly_settlement_cronjob_id), kích
+        hoạt vào ngày settings.monthly_settlement_day mỗi tháng. Chốt nốt các buổi trong tháng
+        trước chưa quyết toán, rồi gửi: (1) tin "đã có sao kê tháng X" vào main_group_chat_id, (2)
+        chi tiết từng buổi + tổng tiền cần đóng vào group riêng (statement_chat_id) của từng thành
+        viên, (3) tin tổng kết vào admin_group_chat_id. Idempotent qua
+        settings.last_monthly_settlement_run.
+      security:
+        - cronBearer: []
+      responses:
+        "200":
+          description: Đã chạy xong (hoặc bỏ qua nếu chưa tới ngày/đã chạy tháng này)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  ranAt:
+                    type: string
+                    format: date-time
+        "401":
+          description: Sai hoặc thiếu CRON_SECRET
 
   /api/settings:
     get:

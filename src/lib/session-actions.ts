@@ -600,6 +600,29 @@ export async function runDueMonthlySettlement(settings: SettingsDocT) {
 
   const statements = await MonthlyStatement.find({ month: targetMonth, total_amount: { $gt: 0 } });
 
+  if (statements.length === 0) {
+    settings.last_monthly_settlement_run = targetMonth;
+    await settings.save();
+    return;
+  }
+
+  // Chi tiết từng buổi trong tháng (ngày + số tiền) để đính kèm vào tin nhắn riêng từng thành viên,
+  // thay vì chỉ đưa tổng số buổi/tổng tiền như trước.
+  const sessionsInMonth = await Session.find({
+    date: { $gte: monthStart, $lt: monthEnd },
+    cost_settled_at: { $exists: true },
+  }).sort({ date: 1 });
+  const sessionById = new Map(sessionsInMonth.map((s) => [s._id.toString(), s]));
+  const memberCosts = await SessionMemberCost.find({
+    session_id: { $in: sessionsInMonth.map((s) => s._id) },
+  });
+  const costsByMember = new Map<string, typeof memberCosts>();
+  for (const c of memberCosts) {
+    const key = c.member_id.toString();
+    if (!costsByMember.has(key)) costsByMember.set(key, []);
+    costsByMember.get(key)!.push(c);
+  }
+
   let totalClub = 0;
   for (const statement of statements) {
     const member = await Member.findById(statement.member_id);
@@ -608,9 +631,23 @@ export async function runDueMonthlySettlement(settings: SettingsDocT) {
     totalClub += statement.total_amount;
 
     if (member.statement_chat_id) {
+      const detailLines = (costsByMember.get(statement.member_id.toString()) ?? [])
+        .map((c) => {
+          const session = sessionById.get(c.session_id.toString());
+          const label = session ? formatVNDate(session.date) : "?";
+          return `- ${label}: ${c.amount.toLocaleString("vi-VN")}đ`;
+        })
+        .join("\n");
+
       await sendMessage(
         member.statement_chat_id,
-        `📄 <b>Sao kê tháng ${targetMonth}</b>\nSố buổi tham gia: ${statement.total_sessions}\nTổng tiền cần đóng: <b>${statement.total_amount.toLocaleString("vi-VN")}đ</b>`,
+        [
+          `📄 <b>Sao kê tháng ${targetMonth}</b>`,
+          `Số buổi tham gia: ${statement.total_sessions}`,
+          ...(detailLines ? ["", "Chi tiết:", detailLines] : []),
+          "",
+          `Tổng tiền cần đóng: <b>${statement.total_amount.toLocaleString("vi-VN")}đ</b>`,
+        ].join("\n"),
         {
           reply_markup: {
             inline_keyboard: [
@@ -622,7 +659,14 @@ export async function runDueMonthlySettlement(settings: SettingsDocT) {
     }
   }
 
-  if (settings.admin_group_chat_id && statements.length > 0) {
+  if (settings.main_group_chat_id) {
+    await sendMessage(
+      settings.main_group_chat_id,
+      `📄 Đã có sao kê tháng ${targetMonth}. Mời mọi người xem chi tiết và số tiền cần thanh toán trong nhóm riêng.`
+    );
+  }
+
+  if (settings.admin_group_chat_id) {
     await sendMessage(
       settings.admin_group_chat_id,
       `📊 Đã chốt sao kê tháng ${targetMonth}: ${statements.length} thành viên, tổng ${totalClub.toLocaleString("vi-VN")}đ.`
