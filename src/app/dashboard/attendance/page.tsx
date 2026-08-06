@@ -305,6 +305,8 @@ function SessionDetail({
   const [reminding, setReminding] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [passingCourt, setPassingCourt] = useState(false);
+  const [minRequired, setMinRequired] = useState(session.min_required);
+  const [savingMinRequired, setSavingMinRequired] = useState(false);
   const isCancelled = session.status === "cancelled";
 
   useEffect(() => {
@@ -321,6 +323,22 @@ function SessionDetail({
       body: JSON.stringify({ notes }),
     });
     setSavingNotes(false);
+  }
+
+  async function handleSaveMinRequired() {
+    setSavingMinRequired(true);
+    const res = await fetch(`/api/sessions/${session._id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ min_required: minRequired }),
+    });
+    setSavingMinRequired(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error ?? "Sửa số người tối thiểu thất bại");
+      return;
+    }
+    onChanged();
   }
 
   async function handleRemind() {
@@ -395,6 +413,27 @@ function SessionDetail({
       <GuestForm sessionId={session._id} disabled={isLocked} />
 
       <CostForm sessionId={session._id} disabled={isLocked} />
+
+      <div className="rounded-lg bg-zinc-50 p-3">
+        <h3 className="mb-2 text-xs font-semibold text-zinc-700">Số người tối thiểu</h3>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={1}
+            value={minRequired}
+            onChange={(e) => setMinRequired(Number(e.target.value))}
+            disabled={isLocked}
+            className="w-24 rounded border border-zinc-300 px-2 py-1.5 text-sm disabled:bg-zinc-100 disabled:text-zinc-400"
+          />
+          <button
+            onClick={handleSaveMinRequired}
+            disabled={savingMinRequired || isLocked || minRequired === session.min_required || minRequired < 1}
+            className="rounded bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+          >
+            Lưu
+          </button>
+        </div>
+      </div>
 
       <div className="rounded-lg bg-zinc-50 p-3">
         <h3 className="mb-2 text-xs font-semibold text-zinc-700">Ghi chú</h3>

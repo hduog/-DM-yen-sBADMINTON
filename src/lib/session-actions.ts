@@ -229,13 +229,21 @@ export async function announceAttendanceChange(
     });
   }
 
-  if (session.status === "scheduled" && costUnits.totalUnits >= session.min_required) {
-    await announceQuotaReached(session, settings, costUnits.totalUnits);
-  } else if (session.status === "confirmed_enough" && costUnits.totalUnits < session.min_required) {
-    await revertQuotaReached(session, settings, costUnits.totalUnits);
-  }
+  await syncQuotaStatus(session, settings, costUnits.totalUnits);
 
   return { detail, costUnits };
+}
+
+// Đối chiếu status hiện tại với số lượng thực (totalUnits) so với min_required, tự chuyển
+// scheduled <-> confirmed_enough cho khớp — dùng chung cho mọi thay đổi ảnh hưởng số lượng tham gia
+// (announceAttendanceChange) lẫn khi admin tự sửa min_required của 1 buổi đã tạo (PATCH
+// /api/sessions/[id]).
+export async function syncQuotaStatus(session: SessionDocT, settings: SettingsDocT, totalUnits: number) {
+  if (session.status === "scheduled" && totalUnits >= session.min_required) {
+    await announceQuotaReached(session, settings, totalUnits);
+  } else if (session.status === "confirmed_enough" && totalUnits < session.min_required) {
+    await revertQuotaReached(session, settings, totalUnits);
+  }
 }
 
 // Chốt đủ người ngay khi số lượng tham gia (thành viên + khách vãng lai) vừa chạm mốc
