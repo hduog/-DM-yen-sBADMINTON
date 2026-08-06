@@ -47,6 +47,7 @@ type SessionDocT = HydratedDocument<{
   notify_message_id?: number;
   notify_sent_at?: Date;
   confirmation_sent_at?: Date;
+  start_notice_sent_at?: Date;
   cost_reminder_sent_at?: Date;
   cost_settled_at?: Date;
   pass_court_at?: Date;
@@ -136,6 +137,13 @@ type AttendanceDetailT = Awaited<ReturnType<typeof getSessionAttendanceDetail>>;
 export function buildAttendDeepLink(sessionId: string, settings: SettingsDocT): string | null {
   if (!settings.bot_username) return null;
   return `https://t.me/${settings.bot_username}?startapp=session_${sessionId}`;
+}
+
+// Deep link tới trang quyết toán /settle/[id] (chỉ admin xem được — xem AttendLayout tương ứng),
+// dùng trong tin nhắn nhắc quyết toán gửi vào nhóm quản trị (xem sendDueSettlementReminders).
+export function buildSettleDeepLink(sessionId: string, settings: SettingsDocT): string | null {
+  if (!settings.bot_username) return null;
+  return `https://t.me/${settings.bot_username}?startapp=settle_${sessionId}`;
 }
 
 // Thay cho sendPollForSession (poll Telegram) — giờ gửi tin nhắn thường kèm nút link tới trang
@@ -276,28 +284,79 @@ export async function reconcileDueAttendance(settings: SettingsDocT) {
   }
 }
 
-// Nhắc admin nhập vật phẩm sau khi buổi tập kết thúc — xem mục 5.2 bước 1.
-export async function sendDueCostReminders(settings: SettingsDocT) {
-  const now = new Date();
-  const sessions = await Session.find({
-    status: { $in: ["confirmed_enough", "confirmed_shortage"] },
-    cost_reminder_sent_at: { $exists: false },
-  });
-
-  for (const session of sessions) {
-    const endAt = combineVNDateTime(session.date, session.end_time);
-    const dueAt = new Date(endAt.getTime() + settings.cost_survey_minutes_after * 60 * 1000);
-    if (now < dueAt) continue;
-
-    if (settings.admin_group_chat_id) {
-      await sendMessage(
-        settings.admin_group_chat_id,
-        `🧾 Buổi tập ${formatVNDate(session.date)} đã kết thúc. Vào Mini App nhập số lượng vật phẩm đã dùng để tính chi phí.`
-      );
-    }
-    session.cost_reminder_sent_at = now;
-    await session.save();
+// Tìm session tương ứng 1 mục weekly_schedule mà KHÔNG tạo mới — dùng bởi job "đang diễn ra"/
+// "nhắc quyết toán" (chạy TẠI/SAU giờ tập nên không dùng ensureSessionForScheduleEntry: hàm đó suy
+// ra "lần diễn ra kế tiếp" từ thứ trong tuần HIỆN TẠI, sẽ tính sai nếu job bắn sau nửa đêm giờ VN
+// (VD buổi tập tối muộn) trong khi buổi tập thực ra thuộc ngày hôm trước. Xét cả hôm nay lẫn hôm
+// qua theo giờ VN để bắt đúng cả 2 trường hợp.
+export async function findSessionForScheduleEntry(entry: WeeklyScheduleEntryT): Promise<SessionDocT | null> {
+  const now = vnNow();
+  const candidateDates: Date[] = [];
+  for (let back = 0; back <= 1; back++) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - back));
+    if (d.getUTCDay() === entry.weekday) candidateDates.push(d);
   }
+  if (candidateDates.length === 0) return null;
+  return Session.findOne({ date: { $in: candidateDates }, start_time: entry.start_time }).sort({ date: -1 });
+}
+
+// Gửi thông báo "buổi tập đang diễn ra" vào nhóm chính — được job cron-job.org riêng của mục lịch
+// gọi đúng giờ bắt đầu (xem /api/cron/session-start/[entryId], cron-sync.ts). Bỏ qua (chỉ đánh dấu
+// đã xử lý, không gửi gì) nếu buổi đã huỷ hoặc đã pass sân. Idempotent qua start_notice_sent_at.
+export async function sendSessionStartingNotice(session: SessionDocT, settings: SettingsDocT) {
+  if (session.start_notice_sent_at) return;
+
+  if (session.status !== "cancelled" && !session.pass_court_at && settings.main_group_chat_id) {
+    const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
+    await sendMessage(
+      settings.main_group_chat_id,
+      `🏸 Buổi tập ${dateLabel} đang diễn ra! Mọi người nhanh chóng tham gia nhé.`
+    );
+  }
+  session.start_notice_sent_at = new Date();
+  await session.save();
+}
+
+// Chạy bù cho job "đang diễn ra" nếu mốc giờ bắt đầu của lần diễn ra hiện tại đã trôi qua ngay tại
+// thời điểm lưu cấu hình (VD: sửa lịch tập sau khi mốc này trong tuần đã qua) — cùng cơ chế với
+// runAttendanceJobIfDue.
+export async function runSessionStartJobIfDue(entry: WeeklyScheduleEntryT, settings: SettingsDocT) {
+  const session = await findSessionForScheduleEntry(entry);
+  if (!session || session.start_notice_sent_at) return;
+  const startAt = combineVNDateTime(session.date, session.start_time);
+  if (new Date() >= startAt) await sendSessionStartingNotice(session, settings);
+}
+
+// Gửi nhắc quyết toán (kèm link /settle/[id]) vào nhóm quản trị — được job cron-job.org riêng của
+// mục lịch gọi ở mốc "sau giờ kết thúc N phút" (settings.cost_survey_minutes_after; xem
+// /api/cron/settlement-reminder/[entryId], cron-sync.ts). Bỏ qua nếu buổi đã huỷ hoặc đã pass sân —
+// 2 trường hợp không có gì để quyết toán qua trang này. Idempotent qua cost_reminder_sent_at.
+export async function sendSettlementReminder(session: SessionDocT, settings: SettingsDocT) {
+  if (session.cost_reminder_sent_at) return;
+
+  if (session.status !== "cancelled" && !session.pass_court_at && settings.admin_group_chat_id) {
+    const deepLink = buildSettleDeepLink(session._id.toString(), settings);
+    const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
+    await sendMessage(
+      settings.admin_group_chat_id,
+      `🧮 Buổi tập ${dateLabel} đã kết thúc. Vào quyết toán chi phí: nhập vật phẩm, xem chia tiền và xác nhận.`,
+      deepLink
+        ? { reply_markup: { inline_keyboard: [[{ text: "Quyết toán buổi tập", url: deepLink }]] } }
+        : undefined
+    );
+  }
+  session.cost_reminder_sent_at = new Date();
+  await session.save();
+}
+
+// Chạy bù cho job nhắc quyết toán nếu mốc "sau giờ kết thúc N phút" đã trôi qua ngay tại thời điểm
+// lưu cấu hình — cùng cơ chế với runAttendanceJobIfDue.
+export async function runSettlementReminderJobIfDue(entry: WeeklyScheduleEntryT, settings: SettingsDocT) {
+  const session = await findSessionForScheduleEntry(entry);
+  if (!session || session.cost_reminder_sent_at) return;
+  const endAt = combineVNDateTime(session.date, session.end_time);
+  const dueAt = new Date(endAt.getTime() + settings.cost_survey_minutes_after * 60 * 1000);
+  if (new Date() >= dueAt) await sendSettlementReminder(session, settings);
 }
 
 // Điều kiện được phép tự thêm/sửa/xoá khách vãng lai từ trang /attend/[id] — cùng điều kiện khoá

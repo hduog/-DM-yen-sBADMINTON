@@ -3,7 +3,7 @@ import { connectDB } from "@/lib/mongodb";
 import { getSettings } from "@/lib/models/Settings";
 import { requireAdmin } from "@/lib/auth-guard";
 import { syncAttendanceCronJobs } from "@/lib/cron-sync";
-import { runAttendanceJobIfDue } from "@/lib/session-actions";
+import { runAttendanceJobIfDue, runSessionStartJobIfDue, runSettlementReminderJobIfDue } from "@/lib/session-actions";
 
 export async function GET() {
   const admin = await requireAdmin();
@@ -26,10 +26,22 @@ export async function PUT(request: NextRequest) {
 
   // Snapshot trước khi ghi đè weekly_schedule — cần để biết mục nào bị xoá (và cronjob_id của nó)
   // nhằm xoá đúng job tương ứng trên cron-job.org sau khi lưu.
-  const oldEntries: { id: string; cronjob_id?: number }[] = settings.weekly_schedule.map(
-    (e: { _id: { toString(): string }; cronjob_id?: number }) => ({
+  const oldEntries: {
+    id: string;
+    cronjob_id?: number;
+    start_notice_cronjob_id?: number;
+    settlement_cronjob_id?: number;
+  }[] = settings.weekly_schedule.map(
+    (e: {
+      _id: { toString(): string };
+      cronjob_id?: number;
+      start_notice_cronjob_id?: number;
+      settlement_cronjob_id?: number;
+    }) => ({
       id: e._id.toString(),
       cronjob_id: e.cronjob_id,
+      start_notice_cronjob_id: e.start_notice_cronjob_id,
+      settlement_cronjob_id: e.settlement_cronjob_id,
     })
   );
 
@@ -66,6 +78,16 @@ export async function PUT(request: NextRequest) {
       await runAttendanceJobIfDue(entry, settings);
     } catch (err) {
       warnings.push(`Lỗi chạy bù job điểm danh cho lịch ${entry.start_time}: ${(err as Error).message}`);
+    }
+    try {
+      await runSessionStartJobIfDue(entry, settings);
+    } catch (err) {
+      warnings.push(`Lỗi chạy bù job "đang diễn ra" cho lịch ${entry.start_time}: ${(err as Error).message}`);
+    }
+    try {
+      await runSettlementReminderJobIfDue(entry, settings);
+    } catch (err) {
+      warnings.push(`Lỗi chạy bù job nhắc quyết toán cho lịch ${entry.start_time}: ${(err as Error).message}`);
     }
   }
 

@@ -23,8 +23,11 @@ function redirectAfterLogin(
 ) {
   const startParam = webApp?.initDataUnsafe?.start_param;
   const sessionMatch = startParam?.match(/^session_([0-9a-f]{24})$/);
+  const settleMatch = startParam?.match(/^settle_([0-9a-f]{24})$/);
   if (sessionMatch) {
     router.replace(`/attend/${sessionMatch[1]}`);
+  } else if (settleMatch) {
+    router.replace(`/settle/${settleMatch[1]}`);
   } else if (role === "admin") {
     router.replace("/dashboard");
   } else {

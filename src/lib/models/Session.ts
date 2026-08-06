@@ -18,6 +18,9 @@ const SessionSchema = new Schema(
     // Đánh dấu các mốc cron đã chạy để tránh trigger trùng — xem mục 6 thiết kế
     notify_sent_at: { type: Date },
     confirmation_sent_at: { type: Date },
+    // Lần gần nhất gửi "buổi tập đang diễn ra" vào nhóm chính, ngay khi tới giờ bắt đầu.
+    start_notice_sent_at: { type: Date },
+    // Lần gần nhất gửi nhắc quyết toán (kèm link) vào nhóm quản trị, sau giờ kết thúc N phút.
     cost_reminder_sent_at: { type: Date },
     // Đã phân bổ chi phí buổi này vào MonthlyStatement chưa — chặn quyết toán/huỷ trùng lặp cộng
     // dồn 2 lần, xem settleSessionCost() trong session-actions.ts.

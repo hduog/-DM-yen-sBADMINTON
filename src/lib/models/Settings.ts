@@ -7,6 +7,10 @@ const WeeklyScheduleEntrySchema = new Schema({
   // id của job trên cron-job.org tương ứng — dùng để update/xoá đúng job khi settings đổi.
   // _id (tự sinh, không tắt như trước) dùng làm định danh entry cho URL /api/cron/attendance/[entryId].
   cronjob_id: { type: Number },
+  // id job "buổi tập đang diễn ra" (đúng giờ bắt đầu) — /api/cron/session-start/[entryId].
+  start_notice_cronjob_id: { type: Number },
+  // id job "nhắc quyết toán" (giờ kết thúc + cost_survey_minutes_after) — /api/cron/settlement-reminder/[entryId].
+  settlement_cronjob_id: { type: Number },
 });
 
 const SettingsSchema = new Schema(

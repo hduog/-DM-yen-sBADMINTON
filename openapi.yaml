@@ -335,9 +335,10 @@ paths:
       summary: Tick scheduler — được cron ngoài gọi mỗi 1-5 phút
       description: >
         Đọc settings + sessions trong DB, tự quyết định việc cần chạy: chốt thiếu người ở mốc
-        T-5h, nhắc nhập chi phí, chốt sao kê tháng. Idempotent nhờ các field *_sent_at /
-        last_monthly_settlement_run. Việc tạo buổi tập + gửi poll điểm danh không còn nằm ở đây —
-        xem /api/cron/attendance/{entryId}.
+        T-5h, báo "buổi tập đang diễn ra" vào nhóm chính lúc bắt đầu, nhắc quyết toán (kèm link
+        /settle/{id}) vào nhóm quản trị sau khi kết thúc, chốt sao kê tháng. Idempotent nhờ các
+        field *_sent_at / last_monthly_settlement_run. Việc tạo buổi tập + gửi poll điểm danh
+        không còn nằm ở đây — xem /api/cron/attendance/{entryId}.
       security:
         - cronBearer: []
       responses:
@@ -387,6 +388,81 @@ paths:
                   sessionId:
                     type: string
                   pollSent:
+                    type: boolean
+        "401":
+          description: Sai hoặc thiếu CRON_SECRET
+        "404":
+          description: Không tìm thấy entryId trong weekly_schedule (job cũ, đã bị xoá)
+
+  /api/cron/session-start/{entryId}:
+    post:
+      tags: [cron]
+      summary: Job "buổi tập đang diễn ra" của 1 lịch tập — được job cron-job.org riêng của mục đó gọi
+      description: >
+        Mỗi mục weekly_schedule có 1 job cron-job.org riêng (tự tạo/cập nhật/xoá khi lưu
+        /api/settings, xem start_notice_cronjob_id), kích hoạt đúng giờ bắt đầu buổi tập. Gửi
+        thông báo mời tham gia vào main_group_chat_id — bỏ qua nếu buổi đã huỷ hoặc đã pass sân.
+        Idempotent qua start_notice_sent_at.
+      parameters:
+        - name: entryId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: _id của mục trong settings.weekly_schedule
+      security:
+        - cronBearer: []
+      responses:
+        "200":
+          description: Đã gửi (hoặc đã từng gửi, hoặc bỏ qua) thông báo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  sessionId:
+                    type: string
+                  sent:
+                    type: boolean
+        "401":
+          description: Sai hoặc thiếu CRON_SECRET
+        "404":
+          description: Không tìm thấy entryId trong weekly_schedule (job cũ, đã bị xoá)
+
+  /api/cron/settlement-reminder/{entryId}:
+    post:
+      tags: [cron]
+      summary: Job nhắc quyết toán của 1 lịch tập — được job cron-job.org riêng của mục đó gọi
+      description: >
+        Mỗi mục weekly_schedule có 1 job cron-job.org riêng (tự tạo/cập nhật/xoá khi lưu
+        /api/settings, xem settlement_cronjob_id), kích hoạt ở mốc "sau giờ kết thúc N phút"
+        (cost_survey_minutes_after). Gửi tin nhắc quyết toán kèm link /settle/{id} vào
+        admin_group_chat_id — bỏ qua nếu buổi đã huỷ hoặc đã pass sân. Idempotent qua
+        cost_reminder_sent_at.
+      parameters:
+        - name: entryId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: _id của mục trong settings.weekly_schedule
+      security:
+        - cronBearer: []
+      responses:
+        "200":
+          description: Đã gửi (hoặc đã từng gửi, hoặc bỏ qua) nhắc quyết toán
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  sessionId:
+                    type: string
+                  sent:
                     type: boolean
         "401":
           description: Sai hoặc thiếu CRON_SECRET
@@ -568,6 +644,63 @@ paths:
           description: Payload không hợp lệ
         "401":
           description: Chưa đăng nhập
+        "404":
+          description: Không tìm thấy buổi tập
+
+  /api/settle/{id}:
+    get:
+      tags: [sessions]
+      summary: Chi tiết quyết toán 1 buổi tập cho trang /settle/{id}
+      description: >
+        Dùng bởi trang /settle/{id}, mở qua link trong tin nhắn nhắc quyết toán gửi vào nhóm quản
+        trị (10 phút sau khi buổi tập kết thúc). Trước khi quyết toán: trả về preview chia tiền
+        theo suất hiện tại (chưa lưu). Sau khi quyết toán (cost_settled_at đã set): trả về đúng số
+        đã chốt trong SessionMemberCost. Sửa vật phẩm vẫn đi qua POST /api/sessions/{id}/costs,
+        bấm nút Quyết toán vẫn đi qua POST /api/sessions/{id}/settle.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Chi tiết quyết toán
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  fixedCost:
+                    type: number
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ItemConfig"
+                  costs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SessionCost"
+                  presentCount:
+                    type: integer
+                  total:
+                    type: number
+                  totalUnits:
+                    type: number
+                  settled:
+                    type: boolean
+                  shares:
+                    type: array
+                    description: Số tiền mỗi thành viên phải trả (preview nếu chưa quyết toán, số đã chốt nếu đã quyết toán)
+                    items:
+                      type: object
+                      properties:
+                        member_id:
+                          type: string
+                        full_name:
+                          type: string
+                        units:
+                          type: number
+                        amount:
+                          type: number
+        "401":
+          description: Chưa đăng nhập / không phải admin
         "404":
           description: Không tìm thấy buổi tập
 
