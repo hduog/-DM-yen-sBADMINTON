@@ -33,6 +33,19 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     return NextResponse.json({ error: "Buổi tập đã quyết toán hoặc đã pass sân, không thể chỉnh sửa" }, { status: 400 });
   }
 
+  let currentTotalUnits = 0;
+  if (body.min_required !== undefined) {
+    currentTotalUnits = (await getSessionCostUnits(session._id.toString())).totalUnits;
+    if (body.min_required < currentTotalUnits) {
+      return NextResponse.json(
+        {
+          error: `Không thể giảm số người tối thiểu xuống dưới số người đã điểm danh tham gia hiện tại (${currentTotalUnits}).`,
+        },
+        { status: 400 }
+      );
+    }
+  }
+
   if (body.notes !== undefined) session.notes = body.notes;
   if (body.status !== undefined) session.status = body.status;
   if (body.min_required !== undefined) session.min_required = body.min_required;
@@ -52,8 +65,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (settings.main_group_chat_id) await sendMessage(settings.main_group_chat_id, text);
     if (settings.admin_group_chat_id) await sendMessage(settings.admin_group_chat_id, text);
   } else if (body.min_required !== undefined) {
-    const { totalUnits } = await getSessionCostUnits(session._id.toString());
-    await syncQuotaStatus(session, settings, totalUnits);
+    await syncQuotaStatus(session, settings, currentTotalUnits);
   }
 
   return NextResponse.json(session);
