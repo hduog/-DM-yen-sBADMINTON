@@ -566,6 +566,69 @@ export async function resetSessionSettlement(session: SessionDocT) {
   await session.save();
 }
 
+// Buổi tập mà các lệnh chat Telegram (/thamgia, /vang, /diemdanh, ...) sẽ thao tác — buổi gần nhất
+// (date >= hôm nay giờ VN) chưa huỷ và chưa quyết toán. Không gắn Session với 1 chat_id cụ thể nào,
+// nên tại một thời điểm chấp nhận chỉ nhắm đúng 1 buổi (nếu trùng nhiều buổi cùng ngày, lấy buổi có
+// start_time sớm hơn).
+export async function findCurrentSessionForMainGroup(): Promise<SessionDocT | null> {
+  const today = vnNow();
+  const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  return Session.findOne({
+    status: { $ne: "cancelled" },
+    cost_settled_at: { $exists: false },
+    date: { $gte: todayUTC },
+  }).sort({ date: 1, start_time: 1 });
+}
+
+// Lệnh /huy: thành viên tự huỷ toàn bộ đăng ký của mình (cả vote điểm danh lẫn khách vãng lai đã
+// đăng ký) cho 1 buổi tập — khác PATCH /api/sessions/[id] vốn là admin huỷ nguyên cả buổi tập.
+export async function unregisterMember(
+  session: SessionDocT,
+  member: MemberDocT,
+  settings: SettingsDocT
+) {
+  await Attendance.deleteOne({ session_id: session._id, member_id: member._id });
+  await SessionGuest.deleteMany({ session_id: session._id, responsible_member_id: member._id });
+
+  const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
+  return announceAttendanceChange(session, settings, () => [
+    `🔄 <b>${member.full_name}</b> đã huỷ đăng ký (cả tham gia lẫn khách vãng lai) buổi tập ${dateLabel}.`,
+  ]);
+}
+
+// Lệnh /thongke: xếp hạng số buổi có mặt/tổng số buổi đã diễn ra (không tính buổi huỷ) trong tháng
+// của monthDate (mặc định tháng hiện tại theo giờ VN), giảm dần theo số buổi có mặt.
+export async function getMonthlyAttendanceRanking(monthDate: Date = vnNow()) {
+  const monthStart = new Date(Date.UTC(monthDate.getUTCFullYear(), monthDate.getUTCMonth(), 1));
+  const monthEnd = new Date(Date.UTC(monthDate.getUTCFullYear(), monthDate.getUTCMonth() + 1, 1));
+
+  const sessions = await Session.find({
+    date: { $gte: monthStart, $lt: monthEnd },
+    status: { $ne: "cancelled" },
+  });
+  const totalSessions = sessions.length;
+  if (totalSessions === 0) {
+    return { totalSessions: 0, ranking: [] as { full_name: string; presentCount: number }[] };
+  }
+
+  const [members, presentAttendances] = await Promise.all([
+    Member.find({ status: "active", del_flag: { $ne: true } }).sort({ full_name: 1 }),
+    Attendance.find({ session_id: { $in: sessions.map((s) => s._id) }, answer: "present" }),
+  ]);
+
+  const countByMember = new Map<string, number>();
+  for (const att of presentAttendances) {
+    const key = att.member_id.toString();
+    countByMember.set(key, (countByMember.get(key) ?? 0) + 1);
+  }
+
+  const ranking = members
+    .map((m) => ({ full_name: m.full_name as string, presentCount: countByMember.get(m._id.toString()) ?? 0 }))
+    .sort((a, b) => b.presentCount - a.presentCount);
+
+  return { totalSessions, ranking };
+}
+
 export function shiftMonth(monthStr: string, delta: number) {
   const [y, m] = monthStr.split("-").map(Number);
   const d = new Date(Date.UTC(y, m - 1 + delta, 1));
