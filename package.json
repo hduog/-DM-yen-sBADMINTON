@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "setup:webhook": "node --env-file=.env.local scripts/set-webhook.mjs"
+    "setup:webhook": "node --env-file=.env scripts/set-webhook.mjs"
   },
   "dependencies": {
     "jose": "^6.2.8",
