@@ -46,6 +46,14 @@ export default function AppEntry() {
   const [loginState, setLoginState] = useState<LoginState>("idle");
   const [loginError, setLoginError] = useState("");
 
+  const [showManualLoginButton, setShowManualLoginButton] = useState(false);
+  const [manualLoginRequested, setManualLoginRequested] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setShowManualLoginButton(true), 4000);
+    return () => clearTimeout(timer);
+  }, []);
+
   useEffect(() => {
     async function authenticate() {
       // 1) Đã có session hợp lệ (cookie clb_session còn hạn 30 ngày) thì dùng luôn, không cần
@@ -160,41 +168,60 @@ export default function AppEntry() {
     }
   }
 
+  const loginForm = (
+    <form onSubmit={handleLogin} className="mt-6 flex w-full max-w-xs flex-col gap-2 text-left">
+      <p className="text-xs font-medium text-zinc-400">Đăng nhập bằng tài khoản</p>
+      <input
+        type="text"
+        required
+        placeholder="Tài khoản"
+        value={loginUsername}
+        onChange={(e) => setLoginUsername(e.target.value)}
+        className="rounded border border-zinc-300 px-3 py-2 text-sm"
+      />
+      <input
+        type="password"
+        required
+        placeholder="Mật khẩu"
+        value={loginPassword}
+        onChange={(e) => setLoginPassword(e.target.value)}
+        className="rounded border border-zinc-300 px-3 py-2 text-sm"
+      />
+      <button
+        type="submit"
+        disabled={loginState === "sending"}
+        className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+      >
+        {loginState === "sending" ? "Đang đăng nhập..." : "Đăng nhập"}
+      </button>
+      {loginState === "error" && <p className="text-sm text-red-500">{loginError}</p>}
+      <Link href="/register" className="mt-1 text-center text-xs text-zinc-500 underline">
+        Chưa có tài khoản? Đăng ký
+      </Link>
+    </form>
+  );
+
+  if (state === "checking" && manualLoginRequested) {
+    return (
+      <Centered>
+        <p className="text-zinc-600">Đăng nhập thủ công</p>
+        {loginForm}
+        <button
+          type="button"
+          onClick={() => setManualLoginRequested(false)}
+          className="mt-3 text-xs text-zinc-400 underline"
+        >
+          Quay lại chờ đăng nhập Telegram
+        </button>
+      </Centered>
+    );
+  }
+
   if (state === "login-fallback") {
     return (
       <Centered>
         <p className="text-zinc-600">{fallbackMessage}</p>
-
-        <form onSubmit={handleLogin} className="mt-6 flex w-full max-w-xs flex-col gap-2 text-left">
-          <p className="text-xs font-medium text-zinc-400">Đăng nhập bằng tài khoản</p>
-          <input
-            type="text"
-            required
-            placeholder="Tài khoản"
-            value={loginUsername}
-            onChange={(e) => setLoginUsername(e.target.value)}
-            className="rounded border border-zinc-300 px-3 py-2 text-sm"
-          />
-          <input
-            type="password"
-            required
-            placeholder="Mật khẩu"
-            value={loginPassword}
-            onChange={(e) => setLoginPassword(e.target.value)}
-            className="rounded border border-zinc-300 px-3 py-2 text-sm"
-          />
-          <button
-            type="submit"
-            disabled={loginState === "sending"}
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-          >
-            {loginState === "sending" ? "Đang đăng nhập..." : "Đăng nhập"}
-          </button>
-          {loginState === "error" && <p className="text-sm text-red-500">{loginError}</p>}
-          <Link href="/register" className="mt-1 text-center text-xs text-zinc-500 underline">
-            Chưa có tài khoản? Đăng ký
-          </Link>
-        </form>
+        {loginForm}
       </Centered>
     );
   }
@@ -242,6 +269,15 @@ export default function AppEntry() {
   return (
     <Centered>
       <p className="text-zinc-500">Đang đăng nhập...</p>
+      {showManualLoginButton && (
+        <button
+          type="button"
+          onClick={() => setManualLoginRequested(true)}
+          className="mt-4 text-sm text-zinc-500 underline"
+        >
+          Đăng nhập thủ công
+        </button>
+      )}
     </Centered>
   );
 }
