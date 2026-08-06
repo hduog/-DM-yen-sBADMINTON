@@ -300,6 +300,24 @@ export async function sendDueCostReminders(settings: SettingsDocT) {
   }
 }
 
+// Điều kiện được phép tự thêm/sửa/xoá khách vãng lai từ trang /attend/[id] — cùng điều kiện khoá
+// với API admin (/api/sessions/[id]/guests: huỷ/đã quyết toán/pass-sân) cộng thêm mốc hết giờ điểm
+// danh (giống vote ở /api/attend/[id]) để member không thể sửa sau khi buổi đã bắt đầu.
+export function assertGuestEditable(session: SessionDocT): string | null {
+  if (session.status === "cancelled") return "Buổi tập đã huỷ, không thể chỉnh sửa";
+  if (session.cost_settled_at || session.pass_court_at) return "Buổi tập đã quyết toán, không thể chỉnh sửa";
+  if (new Date() >= combineVNDateTime(session.date, session.start_time)) {
+    return "Đã quá giờ, buổi tập đã bắt đầu nên không thể chỉnh sửa";
+  }
+  return null;
+}
+
+// Danh sách khách vãng lai do 1 member tự đăng ký (responsible_member_id = chính họ) trong 1 buổi
+// tập — dùng để hiển thị/trả về sau mỗi lần thêm/sửa/xoá ở trang /attend/[id].
+export async function getMemberGuests(sessionId: string, memberId: string) {
+  return SessionGuest.find({ session_id: sessionId, responsible_member_id: memberId }).sort({ createdAt: 1 });
+}
+
 // Tính "suất" chi phí mỗi thành viên gánh trong 1 buổi tập: mỗi member có mặt = 1 suất, cộng
 // thêm số lượng khách vãng lai vào đúng người chịu trách nhiệm (dù người đó có mặt hay không —
 // xem SessionGuest.ts). Dùng chung cho preview real-time (/api/sessions/[id]/costs) và chốt sao

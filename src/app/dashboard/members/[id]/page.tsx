@@ -15,6 +15,7 @@ type MemberInfo = {
   status: "active" | "inactive";
   joined_at: string;
   statement_chat_id?: number;
+  has_password?: boolean;
 };
 
 type Statement = {
@@ -73,6 +74,12 @@ export default function MemberDetailPage() {
   const [chatIdInput, setChatIdInput] = useState("");
   const [savingChatId, setSavingChatId] = useState(false);
 
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [savingCredentials, setSavingCredentials] = useState(false);
+  const [credentialsError, setCredentialsError] = useState("");
+  const [credentialsSaved, setCredentialsSaved] = useState(false);
+
   const [cancelling, setCancelling] = useState(false);
   const [sendingStatement, setSendingStatement] = useState(false);
 
@@ -85,6 +92,7 @@ export default function MemberDetailPage() {
       .then((d: MemberDetailData) => {
         setData(d);
         setChatIdInput(d.member.statement_chat_id ? String(d.member.statement_chat_id) : "");
+        setLoginUsername(d.member.username ?? "");
       })
       .catch(() => setNotFound(true));
   }
@@ -101,6 +109,31 @@ export default function MemberDetailPage() {
       }),
     });
     setSavingChatId(false);
+    load();
+  }
+
+  async function handleSaveCredentials(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingCredentials(true);
+    setCredentialsError("");
+    setCredentialsSaved(false);
+
+    const res = await fetch(`/api/members/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: loginUsername.trim(),
+        ...(loginPassword ? { password: loginPassword } : {}),
+      }),
+    });
+    const resData = await res.json().catch(() => ({}));
+    setSavingCredentials(false);
+    if (!res.ok) {
+      setCredentialsError(resData.error ?? "Lưu thất bại");
+      return;
+    }
+    setLoginPassword("");
+    setCredentialsSaved(true);
     load();
   }
 
@@ -207,6 +240,42 @@ export default function MemberDetailPage() {
         <p className="mt-1.5 text-xs text-zinc-400">
           Mẹo: thêm bot vào nhóm riêng của thành viên rồi gõ <code>/getid</code> trong nhóm đó để lấy Chat ID.
         </p>
+      </section>
+
+      <section className="rounded-xl border border-zinc-200 bg-white p-4">
+        <h2 className="text-sm font-semibold text-zinc-700">Đăng nhập fallback (username/password)</h2>
+        <p className="mt-1 text-xs text-zinc-400">
+          Dùng khi mở app ngoài Telegram hoặc khi đăng nhập Telegram gặp lỗi.
+          {member.has_password ? " Đã có mật khẩu." : " Chưa đặt mật khẩu."}
+        </p>
+        <form onSubmit={handleSaveCredentials} className="mt-2 flex flex-col gap-2">
+          <input
+            type="text"
+            value={loginUsername}
+            onChange={(e) => setLoginUsername(e.target.value)}
+            placeholder="Tài khoản đăng nhập"
+            required
+            className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
+          />
+          <input
+            type="password"
+            value={loginPassword}
+            onChange={(e) => setLoginPassword(e.target.value)}
+            placeholder={member.has_password ? "Mật khẩu mới (để trống nếu không đổi)" : "Mật khẩu (tối thiểu 6 ký tự)"}
+            className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
+          />
+          <button
+            type="submit"
+            disabled={savingCredentials}
+            className="self-start rounded bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+          >
+            {savingCredentials ? "Đang lưu..." : "Lưu tài khoản đăng nhập"}
+          </button>
+          {credentialsError && <p className="text-xs text-red-500">{credentialsError}</p>}
+          {credentialsSaved && !credentialsError && (
+            <p className="text-xs text-emerald-600">Đã lưu.</p>
+          )}
+        </form>
       </section>
 
       <section className="rounded-xl border border-zinc-200 bg-white p-4">

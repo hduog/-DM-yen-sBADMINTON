@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import { Attendance, Member, MonthlyStatement, Session, SessionMemberCost } from "@/lib/models";
 import { requireAdmin } from "@/lib/auth-guard";
+import { hashPassword } from "@/lib/password";
 import { vnNow } from "@/lib/session-actions";
 
 export async function GET(
@@ -16,6 +17,7 @@ export async function GET(
 
   const member = await Member.findOne({ _id: id, del_flag: { $ne: true } });
   if (!member) return NextResponse.json({ error: "Không tìm thấy thành viên" }, { status: 404 });
+  const hasPassword = await Member.exists({ _id: id, password_hash: { $exists: true } });
 
   const now = vnNow();
   const { searchParams } = new URL(request.url);
@@ -57,7 +59,7 @@ export async function GET(
   const statements = await MonthlyStatement.find({ member_id: id }).sort({ month: -1 });
 
   return NextResponse.json({
-    member,
+    member: { ...member.toObject(), has_password: Boolean(hasPassword) },
     monthKey,
     sessionsAttended,
     sessionCosts,
@@ -65,7 +67,8 @@ export async function GET(
   });
 }
 
-// Sửa các trường có thể chỉnh tay từ trang chi tiết thành viên (hiện chỉ có group chat riêng dùng gửi noti sao kê).
+// Sửa các trường có thể chỉnh tay từ trang chi tiết thành viên: group chat riêng dùng gửi noti sao
+// kê, và tài khoản đăng nhập fallback (username/password) — xem /api/auth/login.
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -86,8 +89,28 @@ export async function PATCH(
     member.statement_chat_id = value === null || value === "" ? undefined : Number(value);
   }
 
-  await member.save();
-  return NextResponse.json(member);
+  if ("username" in body) {
+    const value = typeof body.username === "string" ? body.username.trim() : "";
+    member.username = value === "" ? undefined : value;
+  }
+
+  if (typeof body.password === "string" && body.password.length > 0) {
+    if (body.password.length < 6) {
+      return NextResponse.json({ error: "Mật khẩu cần tối thiểu 6 ký tự" }, { status: 400 });
+    }
+    member.password_hash = await hashPassword(body.password);
+  }
+
+  try {
+    await member.save();
+  } catch {
+    return NextResponse.json({ error: "Tài khoản đăng nhập này đã được dùng cho member khác" }, { status: 409 });
+  }
+
+  const responseMember = member.toObject();
+  const hadPassword = "password_hash" in responseMember;
+  delete responseMember.password_hash;
+  return NextResponse.json({ ...responseMember, has_password: hadPassword });
 }
 
 export async function DELETE(

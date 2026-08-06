@@ -2,72 +2,112 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
-type AuthState = "checking" | "error" | "not-telegram";
+type AuthState = "checking" | "join-required" | "login-fallback";
 type JoinKind = "member" | "admin";
 type JoinState = "idle" | "sending" | "sent" | "error";
-type AdminLoginState = "idle" | "sending" | "error";
+type LoginState = "idle" | "sending" | "error";
 
 const JOIN_SENT_MESSAGE: Record<JoinKind, string> = {
   member: "Đã ghi nhận. Bạn sẽ được xác nhận thành viên rồi mở lại app.",
   admin: "Đã gửi yêu cầu. Vui lòng chờ được cấp quyền admin rồi mở lại app.",
 };
 
+type TelegramWebApp = NonNullable<Window["Telegram"]>["WebApp"];
+
+function redirectAfterLogin(
+  router: ReturnType<typeof useRouter>,
+  role: string | undefined,
+  webApp: TelegramWebApp | undefined
+) {
+  const startParam = webApp?.initDataUnsafe?.start_param;
+  const sessionMatch = startParam?.match(/^session_([0-9a-f]{24})$/);
+  if (sessionMatch) {
+    router.replace(`/attend/${sessionMatch[1]}`);
+  } else if (role === "admin") {
+    router.replace("/dashboard");
+  } else {
+    router.replace("/attend");
+  }
+}
+
 export default function AppEntry() {
   const router = useRouter();
   const [state, setState] = useState<AuthState>("checking");
-  const [errorMessage, setErrorMessage] = useState("");
+  const [fallbackMessage, setFallbackMessage] = useState("");
   const [initData, setInitData] = useState("");
   const [joinState, setJoinState] = useState<JoinState>("idle");
   const [joinKind, setJoinKind] = useState<JoinKind | null>(null);
   const [joinError, setJoinError] = useState("");
 
-  const [adminEmail, setAdminEmail] = useState("");
-  const [adminPassword, setAdminPassword] = useState("");
-  const [adminLoginState, setAdminLoginState] = useState<AdminLoginState>("idle");
-  const [adminLoginError, setAdminLoginError] = useState("");
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginState, setLoginState] = useState<LoginState>("idle");
+  const [loginError, setLoginError] = useState("");
 
   useEffect(() => {
     async function authenticate() {
-      const webApp = window.Telegram?.WebApp;
-      if (!webApp) {
-        setState("not-telegram");
-        return;
-      }
-
-      webApp.ready();
-      webApp.expand();
-
-      const data = webApp.initData;
-      if (!data) {
-        setState("not-telegram");
-        return;
-      }
-      setInitData(data);
-
+      // 1) Đã có session hợp lệ (cookie clb_session còn hạn 30 ngày) thì dùng luôn, không cần
+      // re-verify Telegram initData mỗi lần mở app.
       try {
+        const meRes = await fetch("/api/me");
+        if (meRes.ok) {
+          const me = await meRes.json();
+          redirectAfterLogin(router, me.role, window.Telegram?.WebApp);
+          return;
+        }
+      } catch {
+        // Lỗi mạng khi check session — vẫn thử tiếp bằng Telegram bên dưới.
+      }
+
+      // 2) Chưa có session hợp lệ -> thử đăng nhập qua Telegram initData. Toàn bộ nhánh này được
+      // try/catch để không bao giờ mắc kẹt ở màn hình "checking" dù lỗi ở bất kỳ bước nào.
+      try {
+        const webApp = window.Telegram?.WebApp;
+        if (!webApp) {
+          setState("login-fallback");
+          setFallbackMessage(
+            "Vui lòng mở ứng dụng này từ Telegram, hoặc đăng nhập bằng tài khoản bên dưới."
+          );
+          return;
+        }
+
+        webApp.ready();
+        webApp.expand();
+
+        const data = webApp.initData;
+        if (!data) {
+          setState("login-fallback");
+          setFallbackMessage(
+            "Không lấy được dữ liệu đăng nhập từ Telegram. Vui lòng đăng nhập bằng tài khoản bên dưới."
+          );
+          return;
+        }
+        setInitData(data);
+
         const res = await fetch("/api/auth/telegram", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ initData: data }),
         });
         const resData = await res.json().catch(() => ({}));
+
         if (!res.ok) {
-          throw new Error(resData.error ?? "Đăng nhập thất bại");
+          if (res.status === 403) {
+            setState("join-required");
+            setFallbackMessage(resData.error ?? "Bạn không có quyền truy cập Mini App này");
+          } else {
+            setState("login-fallback");
+            setFallbackMessage(resData.error ?? "Đăng nhập Telegram thất bại");
+          }
+          return;
         }
 
-        const startParam = webApp.initDataUnsafe?.start_param;
-        const sessionMatch = startParam?.match(/^session_([0-9a-f]{24})$/);
-        if (sessionMatch) {
-          router.replace(`/attend/${sessionMatch[1]}`);
-        } else if (resData.member?.role === "admin") {
-          router.replace("/dashboard");
-        } else {
-          router.replace("/attend");
-        }
+        redirectAfterLogin(router, resData.member?.role, webApp);
       } catch (err) {
-        setState("error");
-        setErrorMessage(err instanceof Error ? err.message : "Đăng nhập thất bại");
+        setState("login-fallback");
+        setFallbackMessage(err instanceof Error ? err.message : "Đăng nhập thất bại");
       }
     }
 
@@ -98,72 +138,71 @@ export default function AppEntry() {
     }
   }
 
-  async function handleAdminLogin(e: React.FormEvent) {
+  async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
-    setAdminLoginState("sending");
-    setAdminLoginError("");
+    setLoginState("sending");
+    setLoginError("");
 
     try {
-      const res = await fetch("/api/auth/admin-login", {
+      const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: adminEmail, password: adminPassword }),
+        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data.error ?? "Đăng nhập thất bại");
       }
-      router.replace("/dashboard");
+      redirectAfterLogin(router, data.member?.role, window.Telegram?.WebApp);
     } catch (err) {
-      setAdminLoginState("error");
-      setAdminLoginError(err instanceof Error ? err.message : "Đăng nhập thất bại");
+      setLoginState("error");
+      setLoginError(err instanceof Error ? err.message : "Đăng nhập thất bại");
     }
   }
 
-  if (state === "not-telegram") {
+  if (state === "login-fallback") {
     return (
       <Centered>
-        <p className="text-zinc-600">
-          Vui lòng mở ứng dụng này từ Telegram (qua nút Menu của bot) để đăng nhập.
-        </p>
+        <p className="text-zinc-600">{fallbackMessage}</p>
 
-        <form onSubmit={handleAdminLogin} className="mt-6 flex w-full max-w-xs flex-col gap-2 text-left">
-          <p className="text-xs font-medium text-zinc-400">Hoặc đăng nhập bằng tài khoản admin</p>
+        <form onSubmit={handleLogin} className="mt-6 flex w-full max-w-xs flex-col gap-2 text-left">
+          <p className="text-xs font-medium text-zinc-400">Đăng nhập bằng tài khoản</p>
           <input
-            type="email"
+            type="text"
             required
-            placeholder="Email"
-            value={adminEmail}
-            onChange={(e) => setAdminEmail(e.target.value)}
+            placeholder="Tài khoản"
+            value={loginUsername}
+            onChange={(e) => setLoginUsername(e.target.value)}
             className="rounded border border-zinc-300 px-3 py-2 text-sm"
           />
           <input
             type="password"
             required
             placeholder="Mật khẩu"
-            value={adminPassword}
-            onChange={(e) => setAdminPassword(e.target.value)}
+            value={loginPassword}
+            onChange={(e) => setLoginPassword(e.target.value)}
             className="rounded border border-zinc-300 px-3 py-2 text-sm"
           />
           <button
             type="submit"
-            disabled={adminLoginState === "sending"}
+            disabled={loginState === "sending"}
             className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
           >
-            {adminLoginState === "sending" ? "Đang đăng nhập..." : "Đăng nhập"}
+            {loginState === "sending" ? "Đang đăng nhập..." : "Đăng nhập"}
           </button>
-          {adminLoginState === "error" && (
-            <p className="text-sm text-red-500">{adminLoginError}</p>
-          )}
+          {loginState === "error" && <p className="text-sm text-red-500">{loginError}</p>}
+          <Link href="/register" className="mt-1 text-center text-xs text-zinc-500 underline">
+            Chưa có tài khoản? Đăng ký
+          </Link>
         </form>
       </Centered>
     );
   }
 
-  if (state === "error") {
+  if (state === "join-required") {
     return (
       <Centered>
-        <p className="font-medium text-red-600">{errorMessage}</p>
+        <p className="font-medium text-red-600">{fallbackMessage}</p>
         <p className="mt-2 text-sm text-zinc-500">
           Nếu bạn là quản trị viên CLB, hãy liên hệ để được thêm vào danh sách admin.
         </p>

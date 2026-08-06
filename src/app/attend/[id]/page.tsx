@@ -49,6 +49,12 @@ type AttendanceEntry = {
   reason?: string;
 };
 
+type GuestEntry = {
+  _id: string;
+  guest_name?: string;
+  quantity: number;
+};
+
 type AttendData = {
   session: SessionInfo;
   list: AttendanceEntry[];
@@ -57,6 +63,7 @@ type AttendData = {
   noResponseCount: number;
   totalUnits: number;
   viewerMemberId: string;
+  myGuests: GuestEntry[];
 };
 
 function formatSessionDate(dateStr: string) {
@@ -78,6 +85,11 @@ export default function AttendSessionPage() {
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+
+  const [guestForm, setGuestForm] = useState({ guest_name: "", quantity: 1 });
+  const [guestEditingId, setGuestEditingId] = useState<string | null>(null);
+  const [guestSaving, setGuestSaving] = useState(false);
+  const [guestError, setGuestError] = useState("");
 
   function load() {
     fetch(`/api/attend/${id}`)
@@ -117,6 +129,54 @@ export default function AttendSessionPage() {
     }
     setData((prev) => (prev ? { ...prev, ...resData } : prev));
     setEditing(false);
+  }
+
+  function resetGuestForm() {
+    setGuestForm({ guest_name: "", quantity: 1 });
+    setGuestEditingId(null);
+    setGuestError("");
+  }
+
+  function startEditGuest(guest: GuestEntry) {
+    setGuestForm({ guest_name: guest.guest_name ?? "", quantity: guest.quantity });
+    setGuestEditingId(guest._id);
+    setGuestError("");
+  }
+
+  async function handleSaveGuest() {
+    if (guestForm.quantity < 1) {
+      setGuestError("Số lượng không hợp lệ");
+      return;
+    }
+    setGuestSaving(true);
+    setGuestError("");
+    const url = guestEditingId ? `/api/attend/${id}/guests/${guestEditingId}` : `/api/attend/${id}/guests`;
+    const res = await fetch(url, {
+      method: guestEditingId ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(guestForm),
+    });
+    const resData = await res.json().catch(() => ({}));
+    setGuestSaving(false);
+    if (!res.ok) {
+      setGuestError(resData.error ?? "Lưu khách vãng lai thất bại");
+      return;
+    }
+    setData((prev) => (prev ? { ...prev, ...resData } : prev));
+    resetGuestForm();
+  }
+
+  async function handleDeleteGuest(guestId: string) {
+    setGuestSaving(true);
+    const res = await fetch(`/api/attend/${id}/guests/${guestId}`, { method: "DELETE" });
+    const resData = await res.json().catch(() => ({}));
+    setGuestSaving(false);
+    if (!res.ok) {
+      setGuestError(resData.error ?? "Xoá khách vãng lai thất bại");
+      return;
+    }
+    setData((prev) => (prev ? { ...prev, ...resData } : prev));
+    if (guestEditingId === guestId) resetGuestForm();
   }
 
   if (notFound) {
@@ -234,6 +294,80 @@ export default function AttendSessionPage() {
             </button>
           </div>
         )
+      )}
+
+      {!isCancelled && (
+        <div className="rounded-xl border border-zinc-200 bg-white p-4">
+          <h3 className="text-sm font-semibold text-zinc-700">Khách vãng lai</h3>
+          <p className="mt-1 text-xs text-zinc-500">
+            Bạn có thể đăng ký thêm khách vãng lai đi cùng. Bạn sẽ là người chịu trách nhiệm chi phí của khách
+            (cộng dồn vào suất của bạn, dù bạn có tham gia buổi này hay không).
+          </p>
+
+          {data.myGuests.length > 0 && (
+            <div className="mt-3 flex flex-col gap-1">
+              {data.myGuests.map((g) => (
+                <div key={g._id} className="flex items-center justify-between text-sm">
+                  <span>
+                    {g.guest_name || "(không tên)"} × {g.quantity}
+                  </span>
+                  {!isExpired && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => startEditGuest(g)}
+                        disabled={guestSaving}
+                        className="text-xs font-medium text-zinc-600 disabled:opacity-40"
+                      >
+                        Sửa
+                      </button>
+                      <button
+                        onClick={() => handleDeleteGuest(g._id)}
+                        disabled={guestSaving}
+                        className="text-xs text-red-500 disabled:opacity-40"
+                      >
+                        Xoá
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {isExpired ? (
+            <p className="mt-3 text-xs text-zinc-400">Đã quá giờ, không thể đăng ký/chỉnh sửa khách vãng lai.</p>
+          ) : (
+            <div className="mt-3 flex flex-wrap items-end gap-2">
+              <input
+                type="text"
+                placeholder="Tên/ghi chú (tuỳ chọn)"
+                value={guestForm.guest_name}
+                onChange={(e) => setGuestForm({ ...guestForm, guest_name: e.target.value })}
+                className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
+              />
+              <input
+                type="number"
+                min={1}
+                value={guestForm.quantity}
+                onChange={(e) => setGuestForm({ ...guestForm, quantity: Number(e.target.value) })}
+                className="w-20 rounded border border-zinc-300 px-2 py-1.5 text-sm"
+              />
+              <button
+                onClick={handleSaveGuest}
+                disabled={guestSaving}
+                className="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium disabled:opacity-40"
+              >
+                {guestEditingId ? "Lưu" : "+ Thêm"}
+              </button>
+              {guestEditingId && (
+                <button onClick={resetGuestForm} disabled={guestSaving} className="text-xs text-zinc-500">
+                  Huỷ
+                </button>
+              )}
+            </div>
+          )}
+          {guestError && <p className="mt-2 text-xs text-red-500">{guestError}</p>}
+        </div>
       )}
 
       <div className="rounded-xl border border-zinc-200 bg-white p-4">

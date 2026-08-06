@@ -5,6 +5,7 @@ import { getSettings } from "@/lib/models/Settings";
 import { requireActiveMember } from "@/lib/auth-guard";
 import {
   combineVNDateTime,
+  getMemberGuests,
   getSessionAttendanceDetail,
   getSessionCostUnits,
   recordAttendanceVote,
@@ -22,9 +23,10 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const session = await Session.findById(id);
   if (!session) return NextResponse.json({ error: "Không tìm thấy buổi tập" }, { status: 404 });
 
-  const [detail, { totalUnits }] = await Promise.all([
+  const [detail, { totalUnits }, myGuests] = await Promise.all([
     getSessionAttendanceDetail(id),
     getSessionCostUnits(id),
+    getMemberGuests(id, member._id.toString()),
   ]);
   return NextResponse.json({
     session: {
@@ -38,6 +40,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     ...detail,
     totalUnits,
     viewerMemberId: member._id.toString(),
+    myGuests,
   });
 }
 
