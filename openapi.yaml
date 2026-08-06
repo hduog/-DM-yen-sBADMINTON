@@ -239,6 +239,11 @@ paths:
                         status:
                           type: string
                           enum: [pending, paid_reported, approved]
+                  advances:
+                    type: array
+                    description: Toàn bộ khoản chi trước của thành viên, mọi tháng, mới nhất trước
+                    items:
+                      $ref: "#/components/schemas/MemberAdvance"
         "401":
           description: Chưa đăng nhập
         "404":
@@ -306,6 +311,144 @@ paths:
           description: Chưa đăng nhập
         "404":
           description: Không tìm thấy thành viên
+
+  /api/members/{id}/advances:
+    get:
+      tags: [members]
+      summary: Danh sách khoản chi trước của 1 thành viên (mọi tháng, mới nhất trước)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Danh sách MemberAdvance
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MemberAdvance"
+        "401":
+          description: Chưa đăng nhập
+    post:
+      tags: [members]
+      summary: Thêm 1 khoản chi trước (VD cọc sân) cho thành viên trong 1 tháng
+      description: >
+        Sẽ tự động trừ vào total_amount của MonthlyStatement tháng đó khi hệ thống chốt
+        sao kê tháng (đúng ngày settings.monthly_settlement_day) — xem runDueMonthlySettlement.
+        Nếu số tiền chi trước lớn hơn chi phí thực tế tháng đó, phần dư được đánh dấu
+        refund_amount và báo hoàn lại thành viên qua group chat riêng, không tự cộng dồn
+        sang tháng sau.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, month]
+              properties:
+                amount:
+                  type: number
+                month:
+                  type: string
+                  example: "2026-08"
+                note:
+                  type: string
+      responses:
+        "201":
+          description: Khoản chi trước vừa tạo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemberAdvance"
+        "400":
+          description: Payload không hợp lệ
+        "401":
+          description: Chưa đăng nhập
+        "404":
+          description: Không tìm thấy thành viên
+
+  /api/members/{id}/advances/{advanceId}:
+    patch:
+      tags: [members]
+      summary: Sửa 1 khoản chi trước (số tiền, tháng, ghi chú)
+      description: >
+        Admin toàn quyền sửa, kể cả khoản đã status=settled (đã bị trừ vào 1 sao kê trước
+        đó) — hệ thống KHÔNG tự động điều chỉnh lại sao kê đã chốt khi sửa sau này.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: advanceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  type: number
+                month:
+                  type: string
+                note:
+                  type: string
+      responses:
+        "200":
+          description: Khoản chi trước sau khi sửa
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemberAdvance"
+        "400":
+          description: Payload không hợp lệ
+        "401":
+          description: Chưa đăng nhập
+        "404":
+          description: Không tìm thấy khoản chi trước
+    delete:
+      tags: [members]
+      summary: Xoá 1 khoản chi trước
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: advanceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Đã xoá
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        "401":
+          description: Chưa đăng nhập
+        "404":
+          description: Không tìm thấy khoản chi trước
 
   /api/telegram/webhook:
     post:
@@ -1083,6 +1226,34 @@ components:
           format: date-time
         approved_by:
           type: string
+
+    MemberAdvance:
+      type: object
+      properties:
+        _id:
+          type: string
+        member_id:
+          type: string
+        month:
+          type: string
+          example: "2026-08"
+          description: Tháng phát sinh khoản chi trước
+        amount:
+          type: number
+        note:
+          type: string
+        status:
+          type: string
+          enum: [open, settled]
+        applied_amount:
+          type: number
+          description: Phần đã trừ vào chi phí buổi tập (chỉ có giá trị khi status=settled)
+        refund_amount:
+          type: number
+          description: Phần dư cần hoàn lại thành viên (chỉ có giá trị khi status=settled)
+        settled_at:
+          type: string
+          format: date-time
 
     Member:
       type: object

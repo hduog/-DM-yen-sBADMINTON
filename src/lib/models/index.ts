@@ -6,6 +6,7 @@ export { default as SessionCost } from "./SessionCost";
 export { default as SessionGuest } from "./SessionGuest";
 export { default as SessionMemberCost } from "./SessionMemberCost";
 export { default as MonthlyStatement } from "./MonthlyStatement";
+export { default as MemberAdvance } from "./MemberAdvance";
 export { default as RecruitTemplate } from "./RecruitTemplate";
 export { default as FbGroupLink } from "./FbGroupLink";
 export { default as SettingsModel, getSettings } from "./Settings";

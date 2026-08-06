@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { connectDB } from "@/lib/mongodb";
-import { Attendance, Member, MonthlyStatement, Session, SessionMemberCost } from "@/lib/models";
+import { Attendance, Member, MemberAdvance, MonthlyStatement, Session, SessionMemberCost } from "@/lib/models";
 import { requireAdmin } from "@/lib/auth-guard";
 import { hashPassword } from "@/lib/password";
 import { vnNow } from "@/lib/session-actions";
@@ -57,6 +57,7 @@ export async function GET(
     .sort((a, b) => new Date(a.session.date).getTime() - new Date(b.session.date).getTime());
 
   const statements = await MonthlyStatement.find({ member_id: id }).sort({ month: -1 });
+  const advances = await MemberAdvance.find({ member_id: id }).sort({ month: -1, createdAt: -1 });
 
   return NextResponse.json({
     member: { ...member.toObject(), has_password: Boolean(hasPassword) },
@@ -64,6 +65,7 @@ export async function GET(
     sessionsAttended,
     sessionCosts,
     statements,
+    advances,
   });
 }
 

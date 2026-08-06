@@ -3,7 +3,12 @@ import { connectDB } from "@/lib/mongodb";
 import { Attendance, Member, MonthlyStatement, Session, SessionCost } from "@/lib/models";
 import { getSettings } from "@/lib/models/Settings";
 import { combineVNDateTime, getSessionCostUnits, shiftMonth, vnNow } from "@/lib/session-actions";
-import { getCurrentMonthCostBreakdown, getMonthlyCostTrend, getTopDebtors } from "@/lib/dashboard-stats";
+import {
+  getCurrentMonthCostBreakdown,
+  getMonthlyCostTrend,
+  getOutstandingAdvances,
+  getTopDebtors,
+} from "@/lib/dashboard-stats";
 import CostTrendChart from "@/components/charts/CostTrendChart";
 import CostBreakdownChart from "@/components/charts/CostBreakdownChart";
 import DebtorsChart from "@/components/charts/DebtorsChart";
@@ -99,10 +104,11 @@ export default async function DashboardHome() {
       Session.find({ date: { $gte: settlementTargetStart, $lt: settlementTargetEnd } }),
     ]);
 
-  const [monthlyCostTrend, costBreakdown, topDebtors] = await Promise.all([
+  const [monthlyCostTrend, costBreakdown, topDebtors, outstandingAdvances] = await Promise.all([
     getMonthlyCostTrend(6),
     getCurrentMonthCostBreakdown(),
     getTopDebtors(8),
+    getOutstandingAdvances(8),
   ]);
 
   const settlementConfirmedSessions = settlementTargetSessions.filter(
@@ -328,6 +334,16 @@ export default async function DashboardHome() {
           <h3 className="text-xs font-medium text-zinc-500">Top thành viên còn nợ tiền</h3>
           <div className="mt-2">
             <DebtorsChart data={topDebtors} />
+          </div>
+        </section>
+        <section className="rounded-xl border border-zinc-200 bg-white p-4">
+          <h3 className="text-xs font-medium text-zinc-500">Khoản chi trước đang giữ theo thành viên</h3>
+          <div className="mt-2">
+            <DebtorsChart
+              data={outstandingAdvances}
+              emptyMessage="Không có khoản chi trước nào đang mở."
+              tooltipLabel="Chi trước"
+            />
           </div>
         </section>
       </div>

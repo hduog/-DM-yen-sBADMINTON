@@ -5,9 +5,17 @@ import { formatVND } from "./chart-utils";
 
 const BAR_COLOR = "#2a78d6";
 
-export default function DebtorsChart({ data }: { data: { name: string; amount: number }[] }) {
+export default function DebtorsChart({
+  data,
+  emptyMessage = "Không có thành viên nào còn nợ tiền.",
+  tooltipLabel = "Còn nợ",
+}: {
+  data: { name: string; amount: number }[];
+  emptyMessage?: string;
+  tooltipLabel?: string;
+}) {
   if (data.length === 0) {
-    return <p className="py-8 text-center text-sm text-zinc-400">Không có thành viên nào còn nợ tiền.</p>;
+    return <p className="py-8 text-center text-sm text-zinc-400">{emptyMessage}</p>;
   }
 
   const height = Math.max(data.length * 36, 120);
@@ -25,7 +33,7 @@ export default function DebtorsChart({ data }: { data: { name: string; amount: n
           tickLine={false}
         />
         <Tooltip
-          formatter={(value) => [formatVND(Number(value)), "Còn nợ"]}
+          formatter={(value) => [formatVND(Number(value)), tooltipLabel]}
           contentStyle={{ borderRadius: 8, fontSize: 12 }}
         />
         <Bar dataKey="amount" fill={BAR_COLOR} radius={[0, 4, 4, 0]} maxBarSize={24}>

@@ -1,5 +1,5 @@
 import { connectDB } from "@/lib/mongodb";
-import { ItemConfig, Member, MonthlyStatement, Session, SessionCost } from "@/lib/models";
+import { ItemConfig, Member, MemberAdvance, MonthlyStatement, Session, SessionCost } from "@/lib/models";
 import { getSettings } from "@/lib/models/Settings";
 import { vnNow } from "@/lib/session-actions";
 
@@ -63,6 +63,28 @@ export async function getTopDebtors(limit = 8): Promise<Debtor[]> {
   const rows = await MonthlyStatement.aggregate<{ _id: string; amount: number }>([
     { $match: { status: { $in: ["pending", "paid_reported"] } } },
     { $group: { _id: "$member_id", amount: { $sum: "$total_amount" } } },
+    { $match: { amount: { $gt: 0 } } },
+    { $sort: { amount: -1 } },
+    { $limit: limit },
+  ]);
+  if (rows.length === 0) return [];
+
+  const members = await Member.find({ _id: { $in: rows.map((r) => r._id) }, del_flag: { $ne: true } });
+  const nameById = new Map(members.map((m) => [m._id.toString(), m.full_name as string]));
+
+  return rows
+    .filter((r) => nameById.has(r._id.toString()))
+    .map((r) => ({ name: nameById.get(r._id.toString())!, amount: r.amount }));
+}
+
+// Khoản chi trước (VD cọc sân) đang còn giữ (chưa đến ngày quyết toán tháng để trừ/hoàn) theo
+// từng thành viên — sắp giảm dần, cùng shape với getTopDebtors để tái dùng chung DebtorsChart.
+export async function getOutstandingAdvances(limit = 8): Promise<Debtor[]> {
+  await connectDB();
+
+  const rows = await MemberAdvance.aggregate<{ _id: string; amount: number }>([
+    { $match: { status: "open" } },
+    { $group: { _id: "$member_id", amount: { $sum: "$amount" } } },
     { $match: { amount: { $gt: 0 } } },
     { $sort: { amount: -1 } },
     { $limit: limit },

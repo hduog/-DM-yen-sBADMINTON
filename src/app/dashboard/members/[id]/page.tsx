@@ -32,12 +32,25 @@ type SessionCostEntry = {
   units: number;
 };
 
+type AdvanceStatus = "open" | "settled";
+
+type Advance = {
+  _id: string;
+  month: string;
+  amount: number;
+  note?: string;
+  status: AdvanceStatus;
+  applied_amount: number;
+  refund_amount: number;
+};
+
 type MemberDetailData = {
   member: MemberInfo;
   monthKey: string;
   sessionsAttended: number;
   sessionCosts: SessionCostEntry[];
   statements: Statement[];
+  advances: Advance[];
 };
 
 const STATEMENT_STATUS_LABEL: Record<StatementStatus, string> = {
@@ -82,6 +95,13 @@ export default function MemberDetailPage() {
 
   const [cancelling, setCancelling] = useState(false);
   const [sendingStatement, setSendingStatement] = useState(false);
+
+  const [advanceAmount, setAdvanceAmount] = useState("");
+  const [advanceNote, setAdvanceNote] = useState("");
+  const [savingAdvance, setSavingAdvance] = useState(false);
+  const [editingAdvanceId, setEditingAdvanceId] = useState<string | null>(null);
+  const [editAdvanceAmount, setEditAdvanceAmount] = useState("");
+  const [editAdvanceNote, setEditAdvanceNote] = useState("");
 
   function load() {
     fetch(`/api/members/${id}?month=${month}&year=${year}`)
@@ -151,6 +171,67 @@ export default function MemberDetailPage() {
       return;
     }
     alert(`Đã gửi sao kê: ${resData.totalAmount.toLocaleString("vi-VN")}đ`);
+  }
+
+  async function handleAddAdvance(e: React.FormEvent) {
+    e.preventDefault();
+    const amount = Number(advanceAmount);
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    setSavingAdvance(true);
+    const res = await fetch(`/api/members/${id}/advances`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        amount,
+        month: `${year}-${String(month).padStart(2, "0")}`,
+        note: advanceNote.trim() || undefined,
+      }),
+    });
+    setSavingAdvance(false);
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      alert(d.error ?? "Thêm khoản chi trước thất bại");
+      return;
+    }
+    setAdvanceAmount("");
+    setAdvanceNote("");
+    load();
+  }
+
+  function startEditAdvance(advance: Advance) {
+    setEditingAdvanceId(advance._id);
+    setEditAdvanceAmount(String(advance.amount));
+    setEditAdvanceNote(advance.note ?? "");
+  }
+
+  async function handleSaveAdvance(advanceId: string) {
+    const amount = Number(editAdvanceAmount);
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    setSavingAdvance(true);
+    const res = await fetch(`/api/members/${id}/advances/${advanceId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount, note: editAdvanceNote.trim() || "" }),
+    });
+    setSavingAdvance(false);
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      alert(d.error ?? "Sửa khoản chi trước thất bại");
+      return;
+    }
+    setEditingAdvanceId(null);
+    load();
+  }
+
+  async function handleDeleteAdvance(advanceId: string) {
+    if (!confirm("Xoá khoản chi trước này?")) return;
+    const res = await fetch(`/api/members/${id}/advances/${advanceId}`, { method: "DELETE" });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      alert(d.error ?? "Xoá khoản chi trước thất bại");
+      return;
+    }
+    load();
   }
 
   async function handleCancelMember() {
@@ -333,6 +414,113 @@ export default function MemberDetailPage() {
         >
           {sendingStatement ? "Đang gửi..." : "Gửi sao kê tháng này vào Group chat riêng"}
         </button>
+      </section>
+
+      <section className="rounded-xl border border-zinc-200 bg-white p-4">
+        <h2 className="text-sm font-semibold text-zinc-700">Khoản chi trước</h2>
+        <p className="mt-1 text-xs text-zinc-400">
+          VD: cọc sân trước — sẽ tự động trừ vào tổng tiền buổi tập của thành viên khi chốt sao kê tháng.
+        </p>
+
+        <div className="mt-2 flex flex-col gap-1.5">
+          {data.advances.length === 0 && (
+            <p className="text-xs text-zinc-400">Chưa có khoản chi trước nào.</p>
+          )}
+          {data.advances.map((a) => (
+            <div key={a._id} className="rounded-lg bg-zinc-50 px-3 py-2 text-xs">
+              {editingAdvanceId === a._id ? (
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex gap-1.5">
+                    <input
+                      type="number"
+                      value={editAdvanceAmount}
+                      onChange={(e) => setEditAdvanceAmount(e.target.value)}
+                      className="w-32 rounded border border-zinc-300 px-2 py-1"
+                    />
+                    <input
+                      type="text"
+                      value={editAdvanceNote}
+                      onChange={(e) => setEditAdvanceNote(e.target.value)}
+                      placeholder="Ghi chú"
+                      className="flex-1 rounded border border-zinc-300 px-2 py-1"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleSaveAdvance(a._id)}
+                      disabled={savingAdvance}
+                      className="rounded bg-zinc-900 px-2 py-1 font-medium text-white disabled:opacity-40"
+                    >
+                      Lưu
+                    </button>
+                    <button
+                      onClick={() => setEditingAdvanceId(null)}
+                      className="rounded border border-zinc-300 px-2 py-1 font-medium"
+                    >
+                      Huỷ
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-zinc-600">
+                      Tháng {a.month} · <span className="font-medium">{a.amount.toLocaleString("vi-VN")}đ</span>
+                      {a.note ? ` · ${a.note}` : ""}
+                    </p>
+                    {a.status === "settled" && (
+                      <p className="mt-0.5 text-zinc-400">
+                        Đã trừ {a.applied_amount.toLocaleString("vi-VN")}đ
+                        {a.refund_amount > 0 ? ` · Hoàn lại ${a.refund_amount.toLocaleString("vi-VN")}đ` : ""}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span
+                      className={`rounded-full px-2 py-0.5 font-medium ${
+                        a.status === "open" ? "bg-amber-100 text-amber-700" : "bg-zinc-100 text-zinc-600"
+                      }`}
+                    >
+                      {a.status === "open" ? "Còn mở" : "Đã quyết toán"}
+                    </span>
+                    <button onClick={() => startEditAdvance(a)} className="text-zinc-500 hover:text-zinc-700">
+                      Sửa
+                    </button>
+                    <button onClick={() => handleDeleteAdvance(a._id)} className="text-red-500 hover:text-red-600">
+                      Xoá
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <form onSubmit={handleAddAdvance} className="mt-3 flex gap-1.5">
+          <input
+            type="number"
+            value={advanceAmount}
+            onChange={(e) => setAdvanceAmount(e.target.value)}
+            placeholder="Số tiền"
+            required
+            className="w-28 rounded border border-zinc-300 px-2 py-1.5 text-sm"
+          />
+          <input
+            type="text"
+            value={advanceNote}
+            onChange={(e) => setAdvanceNote(e.target.value)}
+            placeholder="Ghi chú (VD: cọc sân)"
+            className="flex-1 rounded border border-zinc-300 px-2 py-1.5 text-sm"
+          />
+          <button
+            type="submit"
+            disabled={savingAdvance}
+            className="rounded bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+          >
+            Thêm
+          </button>
+        </form>
+        <p className="mt-1 text-xs text-zinc-400">Áp dụng cho tháng {month}/{year} (theo bộ lọc ở trên).</p>
       </section>
 
       <section className="rounded-xl border border-zinc-200 bg-white p-4">

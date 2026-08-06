@@ -1,6 +1,7 @@
 import {
   Attendance,
   Member,
+  MemberAdvance,
   MonthlyStatement,
   Session,
   SessionCost,
@@ -600,7 +601,38 @@ export async function runDueMonthlySettlement(settings: SettingsDocT) {
 
   const statements = await MonthlyStatement.find({ month: targetMonth, total_amount: { $gt: 0 } });
 
-  if (statements.length === 0) {
+  // Áp dụng khoản chi trước (MemberAdvance) còn mở, phát sinh từ targetMonth trở về trước (bắt cả
+  // khoản bị bỏ sót ở chu kỳ trước) — mỗi khoản chỉ áp dụng đúng 1 lần: trừ vào total_amount của
+  // sao kê tháng này (nếu có), phần dư (chi trước nhiều hơn chi phí thực tế) đánh dấu refund_amount
+  // để báo hoàn lại thành viên thay vì tự động cộng dồn sang tháng sau.
+  const dueAdvances = await MemberAdvance.find({ status: "open", month: { $lte: targetMonth } });
+  const statementByMember = new Map(statements.map((s) => [s.member_id.toString(), s]));
+  const advanceResultByMember = new Map<string, { applied: number; refund: number }>();
+
+  for (const advance of dueAdvances) {
+    const memberId = advance.member_id.toString();
+    const statement = statementByMember.get(memberId);
+    const available = statement?.total_amount ?? 0;
+    const applied = Math.min(advance.amount, available);
+
+    if (applied > 0 && statement) {
+      statement.total_amount -= applied;
+      statement.advance_applied = (statement.advance_applied ?? 0) + applied;
+      await statement.save();
+    }
+
+    const refund = advance.amount - applied;
+    advance.status = "settled";
+    advance.applied_amount = applied;
+    advance.refund_amount = refund;
+    advance.settled_at = new Date();
+    await advance.save();
+
+    const prev = advanceResultByMember.get(memberId) ?? { applied: 0, refund: 0 };
+    advanceResultByMember.set(memberId, { applied: prev.applied + applied, refund: prev.refund + refund });
+  }
+
+  if (statements.length === 0 && dueAdvances.length === 0) {
     settings.last_monthly_settlement_run = targetMonth;
     await settings.save();
     return;
@@ -624,11 +656,18 @@ export async function runDueMonthlySettlement(settings: SettingsDocT) {
   }
 
   let totalClub = 0;
+  let totalAdvanceApplied = 0;
+  let totalAdvanceRefund = 0;
   for (const statement of statements) {
     const member = await Member.findById(statement.member_id);
     if (!member) continue;
 
     totalClub += statement.total_amount;
+    const advanceResult = advanceResultByMember.get(statement.member_id.toString());
+    if (advanceResult) {
+      totalAdvanceApplied += advanceResult.applied;
+      totalAdvanceRefund += advanceResult.refund;
+    }
 
     if (member.statement_chat_id) {
       const detailLines = (costsByMember.get(statement.member_id.toString()) ?? [])
@@ -639,12 +678,23 @@ export async function runDueMonthlySettlement(settings: SettingsDocT) {
         })
         .join("\n");
 
+      const advanceLines: string[] = [];
+      if (advanceResult?.applied) {
+        advanceLines.push(`Đã trừ khoản chi trước: ${advanceResult.applied.toLocaleString("vi-VN")}đ`);
+      }
+      if (advanceResult?.refund) {
+        advanceLines.push(
+          `Còn dư khoản chi trước: ${advanceResult.refund.toLocaleString("vi-VN")}đ, sẽ được hoàn lại.`
+        );
+      }
+
       await sendMessage(
         member.statement_chat_id,
         [
           `📄 <b>Sao kê tháng ${targetMonth}</b>`,
           `Số buổi tham gia: ${statement.total_sessions}`,
           ...(detailLines ? ["", "Chi tiết:", detailLines] : []),
+          ...(advanceLines.length > 0 ? ["", ...advanceLines] : []),
           "",
           `Tổng tiền cần đóng: <b>${statement.total_amount.toLocaleString("vi-VN")}đ</b>`,
         ].join("\n"),
@@ -659,7 +709,20 @@ export async function runDueMonthlySettlement(settings: SettingsDocT) {
     }
   }
 
-  if (settings.main_group_chat_id) {
+  // Thành viên có khoản chi trước dư cần hoàn nhưng không có sao kê tháng này (VD không tập buổi
+  // nào trong tháng) — chưa được gửi tin ở vòng lặp trên nên báo riêng.
+  for (const [memberId, result] of advanceResultByMember) {
+    if (statementByMember.has(memberId) || result.refund <= 0) continue;
+    const member = await Member.findById(memberId);
+    if (!member?.statement_chat_id) continue;
+    totalAdvanceRefund += result.refund;
+    await sendMessage(
+      member.statement_chat_id,
+      `📄 <b>Sao kê tháng ${targetMonth}</b>\nKhông có chi phí buổi tập nào tháng này. Khoản chi trước ${result.refund.toLocaleString("vi-VN")}đ sẽ được hoàn lại.`
+    );
+  }
+
+  if (settings.main_group_chat_id && statements.length > 0) {
     await sendMessage(
       settings.main_group_chat_id,
       `📄 Đã có sao kê tháng ${targetMonth}. Mời mọi người xem chi tiết và số tiền cần thanh toán trong nhóm riêng.`
@@ -667,9 +730,13 @@ export async function runDueMonthlySettlement(settings: SettingsDocT) {
   }
 
   if (settings.admin_group_chat_id) {
+    const advanceSummary =
+      totalAdvanceApplied > 0 || totalAdvanceRefund > 0
+        ? `\nKhoản chi trước: đã trừ ${totalAdvanceApplied.toLocaleString("vi-VN")}đ, cần hoàn ${totalAdvanceRefund.toLocaleString("vi-VN")}đ.`
+        : "";
     await sendMessage(
       settings.admin_group_chat_id,
-      `📊 Đã chốt sao kê tháng ${targetMonth}: ${statements.length} thành viên, tổng ${totalClub.toLocaleString("vi-VN")}đ.`
+      `📊 Đã chốt sao kê tháng ${targetMonth}: ${statements.length} thành viên, tổng ${totalClub.toLocaleString("vi-VN")}đ.${advanceSummary}`
     );
   }
 
