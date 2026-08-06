@@ -3,6 +3,10 @@ import { connectDB } from "@/lib/mongodb";
 import { Attendance, Member, MonthlyStatement, Session, SessionCost } from "@/lib/models";
 import { getSettings } from "@/lib/models/Settings";
 import { combineVNDateTime, getSessionCostUnits, shiftMonth, vnNow } from "@/lib/session-actions";
+import { getCurrentMonthCostBreakdown, getMonthlyCostTrend, getTopDebtors } from "@/lib/dashboard-stats";
+import CostTrendChart from "@/components/charts/CostTrendChart";
+import CostBreakdownChart from "@/components/charts/CostBreakdownChart";
+import DebtorsChart from "@/components/charts/DebtorsChart";
 
 const WEEKDAY_LABEL = ["Chủ nhật", "Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7"];
 
@@ -94,6 +98,12 @@ export default async function DashboardHome() {
       MonthlyStatement.countDocuments({ status: { $in: ["pending", "paid_reported"] } }),
       Session.find({ date: { $gte: settlementTargetStart, $lt: settlementTargetEnd } }),
     ]);
+
+  const [monthlyCostTrend, costBreakdown, topDebtors] = await Promise.all([
+    getMonthlyCostTrend(6),
+    getCurrentMonthCostBreakdown(),
+    getTopDebtors(8),
+  ]);
 
   const settlementConfirmedSessions = settlementTargetSessions.filter(
     (s) => s.status === "confirmed_enough" || s.status === "confirmed_shortage"
@@ -299,6 +309,28 @@ export default async function DashboardHome() {
           </p>
         </div>
       </section>
+
+      <div className="flex flex-col gap-3">
+        <h2 className="text-sm font-semibold text-zinc-700">Tài chính</h2>
+        <section className="rounded-xl border border-zinc-200 bg-white p-4">
+          <h3 className="text-xs font-medium text-zinc-500">Xu hướng chi phí theo tháng</h3>
+          <div className="mt-2">
+            <CostTrendChart data={monthlyCostTrend} />
+          </div>
+        </section>
+        <section className="rounded-xl border border-zinc-200 bg-white p-4">
+          <h3 className="text-xs font-medium text-zinc-500">Cơ cấu chi phí tháng này</h3>
+          <div className="mt-2">
+            <CostBreakdownChart data={costBreakdown} />
+          </div>
+        </section>
+        <section className="rounded-xl border border-zinc-200 bg-white p-4">
+          <h3 className="text-xs font-medium text-zinc-500">Top thành viên còn nợ tiền</h3>
+          <div className="mt-2">
+            <DebtorsChart data={topDebtors} />
+          </div>
+        </section>
+      </div>
 
       <div>
         <h2 className="mb-2 text-sm font-semibold text-zinc-700">Thành viên</h2>
