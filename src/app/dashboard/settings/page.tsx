@@ -23,6 +23,7 @@ type Settings = {
   reminder_hours_before: number;
   cost_survey_minutes_after: number;
   monthly_settlement_day: number;
+  daily_summary_time: string;
 };
 
 export default function SettingsPage() {
@@ -184,6 +185,16 @@ export default function SettingsPage() {
           value={settings.monthly_settlement_day}
           onChange={(v) => setSettings({ ...settings, monthly_settlement_day: Number(v) })}
         />
+        <LabeledInput
+          label="Giờ gửi tóm tắt điểm danh hàng ngày"
+          type="time"
+          value={settings.daily_summary_time}
+          onChange={(v) => setSettings({ ...settings, daily_summary_time: v })}
+        />
+        <p className="text-xs text-zinc-400">
+          Mỗi ngày vào giờ này, bot tự gửi vào nhóm chính trạng thái điểm danh (Có/Không/Chưa trả lời)
+          của buổi tập sắp tới — tự tạo buổi nếu chưa có, dựa theo lịch tập hàng tuần ở trên.
+        </p>
       </section>
 
       <button
