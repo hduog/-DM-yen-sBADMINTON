@@ -178,3 +178,52 @@ export async function syncMonthlySettlementCronJob(
 
   return { warnings };
 }
+
+// Đồng bộ job tóm tắt điểm danh hàng ngày trên cron-job.org — 1 job global (không theo từng lịch
+// tập), chạy MỌI ngày trong tuần lúc settings.daily_summary_time (giờ VN). Gọi sau mỗi lần lưu
+// settings, cùng lúc với syncAttendanceCronJobs/syncMonthlySettlementCronJob.
+export async function syncDailySummaryCronJob(
+  settings: HydratedDocument<SettingsDoc>
+): Promise<{ warnings: string[] }> {
+  const warnings: string[] = [];
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  const cronSecret = process.env.CRON_SECRET;
+
+  if (!process.env.CRONJOB_API_KEY) {
+    warnings.push("Chưa cấu hình CRONJOB_API_KEY — bỏ qua đồng bộ job tóm tắt điểm danh hàng ngày trên cron-job.org.");
+    return { warnings };
+  }
+  if (!appUrl || !cronSecret) {
+    warnings.push("Thiếu NEXT_PUBLIC_APP_URL hoặc CRON_SECRET — không thể đồng bộ job tóm tắt điểm danh hàng ngày.");
+    return { warnings };
+  }
+
+  const [h, m] = (settings.daily_summary_time ?? "17:00").split(":").map(Number);
+  const spec = {
+    title: `[YenCLB] Tom tat diem danh hang ngay (${settings.daily_summary_time})`,
+    url: `${appUrl}/api/cron/daily-summary`,
+    bearerSecret: cronSecret,
+    schedule: {
+      timezone: "Asia/Ho_Chi_Minh",
+      hours: [h],
+      minutes: [m],
+      mdays: [-1],
+      months: [-1],
+      wdays: [-1],
+    },
+  };
+
+  try {
+    if (!settings.daily_summary_cronjob_id) {
+      settings.daily_summary_cronjob_id = await createCronJob(spec);
+    } else {
+      await updateCronJob(settings.daily_summary_cronjob_id, spec);
+    }
+    await settings.save();
+  } catch (err) {
+    warnings.push(`Lỗi đồng bộ job "${spec.title}": ${(err as Error).message}`);
+  }
+
+  return { warnings };
+}

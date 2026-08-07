@@ -35,6 +35,10 @@ const SettingsSchema = new Schema(
     // id job chốt sao kê tháng trên cron-job.org (1 job global, không theo từng lịch tập) — kích
     // hoạt vào ngày monthly_settlement_day mỗi tháng, xem /api/cron/monthly-settlement.
     monthly_settlement_cronjob_id: { type: Number },
+    // Giờ gửi tin tóm tắt điểm danh hàng ngày ("HH:mm", giờ VN) — xem /api/cron/daily-summary.
+    daily_summary_time: { type: String, default: "17:00" },
+    // id job tóm tắt điểm danh hàng ngày trên cron-job.org (1 job global, chạy mọi ngày trong tuần).
+    daily_summary_cronjob_id: { type: Number },
   },
   { timestamps: true }
 );

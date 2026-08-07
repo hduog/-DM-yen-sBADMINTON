@@ -60,6 +60,27 @@ type MemberDocT = HydratedDocument<{ full_name: string }>;
 
 type WeeklyScheduleEntryT = { weekday: number; start_time: string; end_time: string };
 
+// Tạo (nếu chưa có) Session cho 1 mục weekly_schedule đúng vào targetDate — idempotent qua
+// findOne({date, start_time}). Dùng chung cho cả ensureSessionForScheduleEntry (ngày = lần diễn ra
+// kế tiếp tính từ hôm nay) lẫn ensureUpcomingSessionForMainGroup (ngày đã tính sẵn, có thể là tuần
+// sau nếu occurrence hôm nay đã trôi qua).
+async function ensureSessionForEntryDate(
+  entry: WeeklyScheduleEntryT,
+  targetDate: Date,
+  settings: SettingsDocT
+): Promise<SessionDocT> {
+  const existing = await Session.findOne({ date: targetDate, start_time: entry.start_time });
+  if (existing) return existing;
+
+  return Session.create({
+    date: targetDate,
+    start_time: entry.start_time,
+    end_time: entry.end_time,
+    min_required: settings.required_participants ?? 1,
+    status: "scheduled",
+  });
+}
+
 // Tạo (nếu chưa có) Session cho lần diễn ra kế tiếp của 1 mục weekly_schedule — idempotent qua
 // findOne({date, start_time}). Được gọi từ /api/cron/attendance/[entryId] khi job cron-job.org
 // tương ứng kích hoạt (xem cron-sync.ts) — thay cho ensureUpcomingSessions cũ chạy theo tick.
@@ -74,16 +95,46 @@ export async function ensureSessionForScheduleEntry(
     Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + daysUntil)
   );
 
-  const existing = await Session.findOne({ date: targetDate, start_time: entry.start_time });
-  if (existing) return existing;
+  return ensureSessionForEntryDate(entry, targetDate, settings);
+}
 
-  return Session.create({
-    date: targetDate,
-    start_time: entry.start_time,
-    end_time: entry.end_time,
-    min_required: settings.required_participants ?? 1,
-    status: "scheduled",
-  });
+// Buổi tập sắp tới nhất trong TOÀN BỘ weekly_schedule (không chỉ 1 mục) — dùng cho job tóm tắt điểm
+// danh hàng ngày (/api/cron/daily-summary). Khác findCurrentSessionForMainGroup (chỉ đọc Session đã
+// có sẵn trong DB, dùng cho lệnh chat): hàm này suy thẳng từ weekly_schedule và TỰ TẠO buổi nếu chưa
+// có (idempotent qua ensureSessionForEntryDate, không tạo trùng). Nếu occurrence hôm nay của 1 mục
+// đã trôi qua giờ bắt đầu, tự lùi sang tuần sau cho đúng mục đó trước khi so sánh "gần nhất" giữa
+// các mục — tránh báo nhầm 1 buổi đã bắt đầu/kết thúc trong ngày là "sắp tới".
+export async function ensureUpcomingSessionForMainGroup(
+  settings: SettingsDocT
+): Promise<SessionDocT | null> {
+  if (!settings.weekly_schedule || settings.weekly_schedule.length === 0) return null;
+
+  const now = new Date();
+  const today = vnNow();
+  const todayWeekday = today.getUTCDay();
+
+  let best: { entry: WeeklyScheduleEntryT; targetDate: Date; startAt: Date } | null = null;
+  for (const entry of settings.weekly_schedule) {
+    const daysUntil = (entry.weekday - todayWeekday + 7) % 7;
+    let targetDate = new Date(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + daysUntil)
+    );
+    let startAt = combineVNDateTime(targetDate, entry.start_time);
+
+    if (startAt.getTime() <= now.getTime()) {
+      targetDate = new Date(
+        Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate() + 7)
+      );
+      startAt = combineVNDateTime(targetDate, entry.start_time);
+    }
+
+    if (!best || startAt.getTime() < best.startAt.getTime()) {
+      best = { entry, targetDate, startAt };
+    }
+  }
+  if (!best) return null;
+
+  return ensureSessionForEntryDate(best.entry, best.targetDate, settings);
 }
 
 // Nếu mốc "trước giờ tập N tiếng" của lần diễn ra kế tiếp đã trôi qua ngay tại thời điểm lưu

@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import { getSettings } from "@/lib/models/Settings";
 import { requireAdmin } from "@/lib/auth-guard";
-import { syncAttendanceCronJobs, syncMonthlySettlementCronJob } from "@/lib/cron-sync";
+import { syncAttendanceCronJobs, syncDailySummaryCronJob, syncMonthlySettlementCronJob } from "@/lib/cron-sync";
 import {
   runAttendanceJobIfDue,
   runDueMonthlySettlement,
@@ -61,6 +61,7 @@ export async function PUT(request: NextRequest) {
     "reminder_hours_before",
     "cost_survey_minutes_after",
     "monthly_settlement_day",
+    "daily_summary_time",
   ] as const;
 
   for (const field of editableFields) {
@@ -80,6 +81,9 @@ export async function PUT(request: NextRequest) {
 
   const { warnings: monthlyWarnings } = await syncMonthlySettlementCronJob(settings);
   warnings.push(...monthlyWarnings);
+
+  const { warnings: dailySummaryWarnings } = await syncDailySummaryCronJob(settings);
+  warnings.push(...dailySummaryWarnings);
 
   for (const entry of settings.weekly_schedule) {
     try {
