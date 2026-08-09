@@ -12,6 +12,7 @@ import {
   getMonthlyAttendanceRanking,
   getSessionAttendanceDetail,
   getSessionCostUnits,
+  getSessionGuestDetail,
   recordAttendanceVote,
   unregisterMember,
 } from "@/lib/session-actions";
@@ -297,7 +298,10 @@ async function handleDiemDanh(message: TelegramMessage) {
   if (!ctx) return;
   const { session } = ctx;
 
-  const detail = await getSessionAttendanceDetail(session._id.toString());
+  const [detail, guestDetail] = await Promise.all([
+    getSessionAttendanceDetail(session._id.toString()),
+    getSessionGuestDetail(session._id.toString()),
+  ]);
   const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
   const presentNames = detail.list.filter((m) => m.answer === "present").map((m) => m.full_name);
   const absentNames = detail.list.filter((m) => m.answer === "absent").map((m) => m.full_name);
@@ -309,6 +313,7 @@ async function handleDiemDanh(message: TelegramMessage) {
     `✅ Tham gia (${presentNames.length}): ${presentNames.length > 0 ? presentNames.join(", ") : "(chưa ai)"}`,
     `❌ Không tham gia (${absentNames.length}): ${absentNames.length > 0 ? absentNames.join(", ") : "(chưa ai)"}`,
     `⏳ Chưa điểm danh (${pendingNames.length}): ${pendingNames.length > 0 ? pendingNames.join(", ") : "(không ai)"}`,
+    `👥 Khách vãng lai (${guestDetail.totalQuantity}): ${guestDetail.totalQuantity > 0 ? guestDetail.label : "(không có)"}`,
   ];
 
   await sendMessage(message.chat.id, lines.join("\n"));

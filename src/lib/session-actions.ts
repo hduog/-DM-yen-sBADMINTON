@@ -210,7 +210,7 @@ export async function sendAttendanceNoticeForSession(session: SessionDocT, setti
   const text = `📋 Điểm danh buổi tập ${dateLabel}.\nCần ${session.min_required} người. Bấm nút bên dưới để xác nhận tham gia hoặc không tham gia.`;
 
   const res = await sendMessage(settings.main_group_chat_id, text, {
-    reply_markup: { inline_keyboard: [[{ text: "Xác nhận điểm danh", url: deepLink }]] },
+    reply_markup: { inline_keyboard: [[{ text: "Điểm danh ngay", url: deepLink }]] },
   });
 
   session.notify_message_id = (res as { message_id: number }).message_id;
@@ -307,7 +307,12 @@ async function announceQuotaReached(session: SessionDocT, settings: SettingsDocT
 
   const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
   const text = `✅ Buổi tập ${dateLabel} đã đủ người (${headcount}/${session.min_required}).`;
-  if (settings.main_group_chat_id) await sendMessage(settings.main_group_chat_id, text);
+  const deepLink = buildAttendDeepLink(session._id.toString(), settings);
+  if (settings.main_group_chat_id) {
+    await sendMessage(settings.main_group_chat_id, text, {
+      reply_markup: deepLink ? { inline_keyboard: [[{ text: "Điểm danh ngay", url: deepLink }]] } : undefined,
+    });
+  }
   if (settings.admin_group_chat_id) await sendMessage(settings.admin_group_chat_id, text);
 }
 
@@ -323,7 +328,12 @@ async function revertQuotaReached(session: SessionDocT, settings: SettingsDocT, 
 
   const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
   const text = `⚠️ Buổi tập ${dateLabel} không còn đủ người (${headcount}/${session.min_required}). Mời mọi người tiếp tục đăng ký.`;
-  if (settings.main_group_chat_id) await sendMessage(settings.main_group_chat_id, text);
+  const deepLink = buildAttendDeepLink(session._id.toString(), settings);
+  if (settings.main_group_chat_id) {
+    await sendMessage(settings.main_group_chat_id, text, {
+      reply_markup: deepLink ? { inline_keyboard: [[{ text: "Điểm danh ngay", url: deepLink }]] } : undefined,
+    });
+  }
 }
 
 const CONFIRM_HOURS_BEFORE = 5;
@@ -453,6 +463,21 @@ export function assertGuestEditable(session: SessionDocT): string | null {
 // tập — dùng để hiển thị/trả về sau mỗi lần thêm/sửa/xoá ở trang /attend/[id].
 export async function getMemberGuests(sessionId: string, memberId: string) {
   return SessionGuest.find({ session_id: sessionId, responsible_member_id: memberId }).sort({ createdAt: 1 });
+}
+
+// Tóm tắt khách vãng lai của 1 buổi tập (tên + số lượng + người chịu trách nhiệm) — dùng cho các tin
+// nhắn liệt kê "ai tham gia" (job tóm tắt hàng ngày, /diemdanh) vốn trước đây chỉ dựa vào
+// getSessionAttendanceDetail (chỉ đọc Member/Attendance, không có SessionGuest) nên luôn thiếu khách
+// vãng lai. Cùng format với dòng "Khách vãng lai" trong sendSettlementNotifications.
+export async function getSessionGuestDetail(sessionId: string) {
+  const guests = await SessionGuest.find({ session_id: sessionId }).populate<{
+    responsible_member_id: { full_name: string } | null;
+  }>("responsible_member_id", "full_name");
+  const totalQuantity = guests.reduce((sum, g) => sum + g.quantity, 0);
+  const label = guests
+    .map((g) => `${g.guest_name || "khách"} x${g.quantity} (${g.responsible_member_id?.full_name ?? "?"})`)
+    .join(", ");
+  return { totalQuantity, label };
 }
 
 // Tính "suất" chi phí mỗi thành viên gánh trong 1 buổi tập: mỗi member có mặt = 1 suất, cộng

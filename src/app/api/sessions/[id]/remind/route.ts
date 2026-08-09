@@ -4,7 +4,7 @@ import { Session } from "@/lib/models";
 import { getSettings } from "@/lib/models/Settings";
 import { requireAdmin } from "@/lib/auth-guard";
 import { sendMessage } from "@/lib/telegram";
-import { formatVNDate, getSessionAttendanceDetail } from "@/lib/session-actions";
+import { buildAttendDeepLink, formatVNDate, getSessionAttendanceDetail } from "@/lib/session-actions";
 
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const admin = await requireAdmin();
@@ -38,7 +38,10 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
           .join(", ")} chưa điểm danh, vào poll bình chọn nhé!`
       : `🔔 Buổi tập ${dateLabel}: mọi người đã điểm danh đầy đủ 🎉`;
 
-  await sendMessage(settings.main_group_chat_id, text);
+  const deepLink = buildAttendDeepLink(session._id.toString(), settings);
+  await sendMessage(settings.main_group_chat_id, text, {
+    reply_markup: deepLink ? { inline_keyboard: [[{ text: "Điểm danh ngay", url: deepLink }]] } : undefined,
+  });
 
   return NextResponse.json({ ok: true, noResponseCount: pending.length });
 }
