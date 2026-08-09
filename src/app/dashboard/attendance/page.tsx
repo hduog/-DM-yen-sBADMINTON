@@ -66,6 +66,7 @@ export default function AttendancePage() {
   const [resettingId, setResettingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [activeTab, setActiveTab] = useState<"upcoming" | "settled">("upcoming");
 
   function load() {
     fetch("/api/sessions")
@@ -129,6 +130,9 @@ export default function AttendancePage() {
     load();
   }
 
+  const filteredSessions =
+    sessions?.filter((s) => (activeTab === "settled" ? !!s.cost_settled_at : !s.cost_settled_at)) ?? [];
+
   return (
     <div className="flex flex-col gap-4">
       <div className="rounded-xl border border-zinc-200 bg-white p-4">
@@ -181,10 +185,35 @@ export default function AttendancePage() {
         )}
       </div>
 
+      <div className="flex rounded-xl border border-zinc-200 bg-white p-1">
+        <button
+          type="button"
+          onClick={() => setActiveTab("upcoming")}
+          className={`flex-1 rounded-lg py-2 text-sm font-medium transition ${
+            activeTab === "upcoming" ? "bg-zinc-900 text-white" : "text-zinc-500 hover:text-zinc-700"
+          }`}
+        >
+          Sắp tới
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("settled")}
+          className={`flex-1 rounded-lg py-2 text-sm font-medium transition ${
+            activeTab === "settled" ? "bg-zinc-900 text-white" : "text-zinc-500 hover:text-zinc-700"
+          }`}
+        >
+          Đã quyết toán
+        </button>
+      </div>
+
       <div className="flex flex-col gap-3">
         {sessions === null && <p className="text-sm text-zinc-400">Đang tải...</p>}
-        {sessions?.length === 0 && <p className="text-sm text-zinc-400">Chưa có buổi tập nào.</p>}
-        {sessions?.map((s) => {
+        {sessions !== null && filteredSessions.length === 0 && (
+          <p className="text-sm text-zinc-400">
+            {activeTab === "upcoming" ? "Không có buổi tập nào sắp tới." : "Chưa có buổi tập nào đã quyết toán."}
+          </p>
+        )}
+        {filteredSessions.map((s) => {
           const isLocked = s.status === "cancelled" || !!s.cost_settled_at || !!s.pass_court_at;
           const isNotEndedYet = new Date() < combineVNDateTime(s.date, s.end_time);
           const displayStatus = getDisplayStatus(s);
