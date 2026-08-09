@@ -54,6 +54,7 @@ type SessionDocT = HydratedDocument<{
   pass_court_at?: Date;
   need_recruit?: boolean;
   recruit_count_needed?: number;
+  fixed_cost_override?: number;
 }>;
 
 type MemberDocT = HydratedDocument<{ full_name: string }>;
@@ -480,6 +481,17 @@ export async function getSessionCostUnits(sessionId: string) {
   return { totalUnits, unitsByMember };
 }
 
+// Chi phí cố định CÓ HIỆU LỰC của 1 buổi tập — ưu tiên override riêng buổi đó
+// (session.fixed_cost_override), nếu chưa sửa riêng thì rơi về giá trị chung ở Cài đặt
+// (settings.fixed_cost_per_session). Dùng chung ở mọi nơi tính tiền cho 1 buổi cụ thể để tránh lệch
+// số giữa các màn hình (preview chi phí, quyết toán, xem trước /settle, thống kê dashboard).
+export function getEffectiveFixedCost(
+  session: { fixed_cost_override?: number },
+  settings: SettingsDocT
+): number {
+  return session.fixed_cost_override ?? settings.fixed_cost_per_session ?? 0;
+}
+
 // Phân bổ chi phí 1 buổi tập vào MonthlyStatement — dùng chung cho nút "Quyết toán", tự động khi
 // huỷ buổi, và cron dọn nốt buổi bị bỏ sót cuối tháng (runDueMonthlySettlement). Idempotent qua
 // cost_settled_at: gọi lại trên buổi đã settle sẽ no-op (trả về null) để tránh cộng dồn 2 lần.
@@ -492,12 +504,12 @@ export async function settleSessionCost(session: SessionDocT, settings: Settings
   if (session.status === "cancelled") {
     // Buổi huỷ: không ai điểm danh được, chỉ tính chi phí cố định (VD tiền sân đã cọc không hoàn),
     // chia đều cho TẤT CẢ thành viên active thay vì theo suất có mặt.
-    total = settings.fixed_cost_per_session ?? 0;
+    total = getEffectiveFixedCost(session, settings);
     const activeMembers = await Member.find({ status: "active", del_flag: { $ne: true } });
     unitsByMember = new Map(activeMembers.map((m) => [m._id.toString(), 1]));
   } else {
     const costs = await SessionCost.find({ session_id: session._id });
-    total = costs.reduce((sum, c) => sum + c.total_amount, 0) + (settings.fixed_cost_per_session ?? 0);
+    total = costs.reduce((sum, c) => sum + c.total_amount, 0) + getEffectiveFixedCost(session, settings);
     ({ unitsByMember } = await getSessionCostUnits(session._id.toString()));
   }
 

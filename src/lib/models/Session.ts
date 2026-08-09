@@ -27,6 +27,9 @@ const SessionSchema = new Schema(
     cost_settled_at: { type: Date },
     // Lần gần nhất bấm "Pass sân" — thuần đánh dấu để hiển thị UI, không khoá gì.
     pass_court_at: { type: Date },
+    // Chi phí cố định riêng cho buổi này, ghi đè Settings.fixed_cost_per_session — undefined nghĩa
+    // là "dùng giá trị Cài đặt hiện hành" (xem getEffectiveFixedCost trong session-actions.ts).
+    fixed_cost_override: { type: Number },
   },
   { timestamps: true }
 );

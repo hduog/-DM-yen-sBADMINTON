@@ -2,7 +2,7 @@ import Link from "next/link";
 import { connectDB } from "@/lib/mongodb";
 import { Attendance, Member, MonthlyStatement, Session, SessionCost } from "@/lib/models";
 import { getSettings } from "@/lib/models/Settings";
-import { combineVNDateTime, getSessionCostUnits, shiftMonth, vnNow } from "@/lib/session-actions";
+import { combineVNDateTime, getEffectiveFixedCost, getSessionCostUnits, shiftMonth, vnNow } from "@/lib/session-actions";
 import {
   getCurrentMonthCostBreakdown,
   getMonthlyCostTrend,
@@ -119,7 +119,7 @@ export default async function DashboardHome() {
     : [];
   const settlementTotalCost =
     settlementCosts.reduce((sum, c) => sum + c.total_amount, 0) +
-    settlementConfirmedSessions.length * (settings.fixed_cost_per_session ?? 0);
+    settlementConfirmedSessions.reduce((sum, s) => sum + getEffectiveFixedCost(s, settings), 0);
 
   const fromTodaySessions = allFromTodaySessions.filter((s) => s.status !== "cancelled");
 

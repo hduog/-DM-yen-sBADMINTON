@@ -1,7 +1,7 @@
 import { connectDB } from "@/lib/mongodb";
 import { ItemConfig, Member, MemberAdvance, MonthlyStatement, Session, SessionCost } from "@/lib/models";
 import { getSettings } from "@/lib/models/Settings";
-import { vnNow } from "@/lib/session-actions";
+import { getEffectiveFixedCost, vnNow } from "@/lib/session-actions";
 
 export type MonthlyCostPoint = { month: string; total: number };
 export type CostBreakdownSlice = { name: string; value: number };
@@ -50,7 +50,7 @@ export async function getCurrentMonthCostBreakdown(): Promise<CostBreakdownSlice
     value: c.total,
   }));
 
-  const fixedTotal = settledSessions.length * (settings.fixed_cost_per_session ?? 0);
+  const fixedTotal = settledSessions.reduce((sum, s) => sum + getEffectiveFixedCost(s, settings), 0);
   if (fixedTotal > 0) slices.push({ name: "Chi phí cố định", value: fixedTotal });
 
   return slices.sort((a, b) => b.value - a.value);

@@ -4,7 +4,7 @@ import { Attendance, ItemConfig, Session, SessionCost } from "@/lib/models";
 import { getSettings } from "@/lib/models/Settings";
 import { requireAdmin } from "@/lib/auth-guard";
 import { sendMessage } from "@/lib/telegram";
-import { getSessionCostUnits } from "@/lib/session-actions";
+import { getEffectiveFixedCost, getSessionCostUnits } from "@/lib/session-actions";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const admin = await requireAdmin();
@@ -13,22 +13,25 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const { id } = await params;
   await connectDB();
 
-  const [costs, items, presentCount, { totalUnits }, settings] = await Promise.all([
+  const [session, costs, items, presentCount, { totalUnits }, settings] = await Promise.all([
+    Session.findById(id),
     SessionCost.find({ session_id: id }).populate("item_id", "name unit unit_price"),
     ItemConfig.find().sort({ name: 1 }),
     Attendance.countDocuments({ session_id: id, answer: "present" }),
     getSessionCostUnits(id),
     getSettings(),
   ]);
+  if (!session) return NextResponse.json({ error: "Không tìm thấy buổi tập" }, { status: 404 });
 
-  const total = costs.reduce((sum, c) => sum + c.total_amount, 0) + (settings.fixed_cost_per_session ?? 0);
+  const fixedCost = getEffectiveFixedCost(session, settings);
+  const total = costs.reduce((sum, c) => sum + c.total_amount, 0) + fixedCost;
 
   return NextResponse.json({
     costs,
     items,
     presentCount,
     totalUnits,
-    fixedCost: settings.fixed_cost_per_session ?? 0,
+    fixedCost,
     total,
     perPerson: totalUnits > 0 ? Math.round(total / totalUnits) : 0,
   });
@@ -43,6 +46,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!Array.isArray(body?.items)) {
     return NextResponse.json({ error: "Payload không hợp lệ" }, { status: 400 });
   }
+  if (
+    body.fixed_cost_override !== undefined &&
+    (!Number.isFinite(body.fixed_cost_override) || body.fixed_cost_override < 0)
+  ) {
+    return NextResponse.json({ error: "Chi phí cố định không hợp lệ" }, { status: 400 });
+  }
 
   await connectDB();
 
@@ -52,9 +61,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Buổi tập đã quyết toán hoặc đã huỷ, không thể chỉnh sửa" }, { status: 400 });
   }
 
+  if (body.fixed_cost_override !== undefined) {
+    session.fixed_cost_override = body.fixed_cost_override;
+    await session.save();
+  }
+
   const settings = await getSettings();
 
-  let total = settings.fixed_cost_per_session ?? 0;
+  let total = getEffectiveFixedCost(session, settings);
   for (const entry of body.items as { item_id: string; quantity: number }[]) {
     const item = await ItemConfig.findById(entry.item_id);
     if (!item || !entry.quantity) continue;
@@ -82,5 +96,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     );
   }
 
-  return NextResponse.json({ ok: true, total, perPerson, presentCount, totalUnits });
+  return NextResponse.json({
+    ok: true,
+    total,
+    perPerson,
+    presentCount,
+    totalUnits,
+    fixedCost: getEffectiveFixedCost(session, settings),
+  });
 }
