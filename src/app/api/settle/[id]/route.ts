@@ -3,7 +3,7 @@ import { connectDB } from "@/lib/mongodb";
 import { ItemConfig, Member, Session, SessionCost, SessionGuest, SessionMemberCost } from "@/lib/models";
 import { getSettings } from "@/lib/models/Settings";
 import { requireAdmin } from "@/lib/auth-guard";
-import { getSessionAttendanceDetail, getSessionCostUnits } from "@/lib/session-actions";
+import { getEffectiveFixedCost, getSessionAttendanceDetail, getSessionCostUnits } from "@/lib/session-actions";
 
 // Dùng bởi trang /settle/[id] (mở qua link nhắc quyết toán trong nhóm quản trị — xem
 // sendDueSettlementReminders). Chỉ đọc dữ liệu; sửa vật phẩm vẫn đi qua /api/sessions/[id]/costs
@@ -21,7 +21,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   if (!session) return NextResponse.json({ error: "Không tìm thấy buổi tập" }, { status: 404 });
 
   const settings = await getSettings();
-  const fixedCost = settings.fixed_cost_per_session ?? 0;
+  const fixedCost = getEffectiveFixedCost(session, settings);
 
   const [items, costs, guests, detail] = await Promise.all([
     ItemConfig.find().sort({ name: 1 }),

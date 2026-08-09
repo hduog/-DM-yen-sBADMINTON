@@ -618,6 +618,7 @@ type CostSummary = {
 function CostForm({ sessionId, disabled }: { sessionId: string; disabled?: boolean }) {
   const [data, setData] = useState<CostSummary | null>(null);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
+  const [fixedCost, setFixedCost] = useState(0);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -625,6 +626,7 @@ function CostForm({ sessionId, disabled }: { sessionId: string; disabled?: boole
       .then((r) => r.json())
       .then((d: CostSummary) => {
         setData(d);
+        setFixedCost(d.fixedCost);
         const initial: Record<string, number> = {};
         for (const c of d.costs) initial[c.item_id._id] = c.quantity;
         setQuantities(initial);
@@ -639,7 +641,7 @@ function CostForm({ sessionId, disabled }: { sessionId: string; disabled?: boole
     const res = await fetch(`/api/sessions/${sessionId}/costs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items }),
+      body: JSON.stringify({ items, fixed_cost_override: fixedCost }),
     });
     const summary = await res.json();
     setSaving(false);
@@ -651,42 +653,50 @@ function CostForm({ sessionId, disabled }: { sessionId: string; disabled?: boole
             perPerson: summary.perPerson,
             presentCount: summary.presentCount,
             totalUnits: summary.totalUnits,
+            fixedCost: summary.fixedCost,
           }
         : prev
     );
+    setFixedCost(summary.fixedCost);
   }
 
   if (!data) return <p className="text-xs text-zinc-400">Đang tải...</p>;
 
-  if (data.items.length === 0) {
-    return (
-      <p className="text-xs text-zinc-400">
-        Chưa có danh mục vật phẩm. Vào tab Cấu hình để thêm (VD: trái cầu, chai nước).
-      </p>
-    );
-  }
-
   return (
     <div className="rounded-lg bg-zinc-50 p-3">
       <h3 className="mb-2 text-xs font-semibold text-zinc-700">Chi phí</h3>
-      <p className="mb-2 text-xs text-zinc-500">
-        Chi phí cố định: <b>{data.fixedCost.toLocaleString("vi-VN")}đ</b>
-      </p>
-      {data.items.map((item) => (
-        <div key={item._id} className="flex items-center justify-between gap-2 py-1">
-          <span className="text-sm">
-            {item.name} <span className="text-zinc-400">({item.unit_price.toLocaleString("vi-VN")}đ/{item.unit})</span>
-          </span>
-          <input
-            type="number"
-            min={0}
-            value={quantities[item._id] ?? ""}
-            onChange={(e) => setQuantities({ ...quantities, [item._id]: Number(e.target.value) })}
-            disabled={disabled}
-            className="w-20 rounded border border-zinc-300 px-2 py-1 text-sm disabled:bg-zinc-100 disabled:text-zinc-400"
-          />
-        </div>
-      ))}
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-sm">Chi phí cố định</span>
+        <input
+          type="number"
+          min={0}
+          value={fixedCost}
+          onChange={(e) => setFixedCost(Number(e.target.value))}
+          disabled={disabled}
+          className="w-28 rounded border border-zinc-300 px-2 py-1 text-sm disabled:bg-zinc-100 disabled:text-zinc-400"
+        />
+      </div>
+      {data.items.length === 0 ? (
+        <p className="text-xs text-zinc-400">
+          Chưa có danh mục vật phẩm. Vào tab Cấu hình để thêm (VD: trái cầu, chai nước).
+        </p>
+      ) : (
+        data.items.map((item) => (
+          <div key={item._id} className="flex items-center justify-between gap-2 py-1">
+            <span className="text-sm">
+              {item.name} <span className="text-zinc-400">({item.unit_price.toLocaleString("vi-VN")}đ/{item.unit})</span>
+            </span>
+            <input
+              type="number"
+              min={0}
+              value={quantities[item._id] ?? ""}
+              onChange={(e) => setQuantities({ ...quantities, [item._id]: Number(e.target.value) })}
+              disabled={disabled}
+              className="w-20 rounded border border-zinc-300 px-2 py-1 text-sm disabled:bg-zinc-100 disabled:text-zinc-400"
+            />
+          </div>
+        ))
+      )}
       <div className="mt-2 flex items-center justify-between border-t border-zinc-200 pt-2 text-sm">
         <span>
           Tổng: <b>{data.total.toLocaleString("vi-VN")}đ</b> · {data.presentCount} thành viên có mặt
