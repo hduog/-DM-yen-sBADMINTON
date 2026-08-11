@@ -622,7 +622,7 @@ export async function sendSettlementNotifications(
   if (settings.admin_group_chat_id) {
     const lines = [`🧮 <b>Đã quyết toán buổi tập ${dateLabel}</b>`, ""];
 
-    const fixedCost = settings.fixed_cost_per_session ?? 0;
+    const fixedCost = getEffectiveFixedCost(session, settings);
     if (session.status === "cancelled") {
       lines.push(`Buổi huỷ — chỉ tính chi phí cố định: ${fixedCost.toLocaleString("vi-VN")}đ`);
     } else {
