@@ -601,6 +601,24 @@ export async function sendSettlementNotifications(
   const memberById = new Map(members.map((m) => [m._id.toString(), m]));
   const presentNames = detail.list.filter((m) => m.answer === "present").map((m) => m.full_name);
 
+  // Gửi tin riêng cho từng thành viên TRƯỚC — bọc try/catch để 1 người gửi lỗi (VD đã chặn bot, xoá
+  // chat riêng) không làm dừng vòng lặp giữa chừng và bỏ sót các thành viên còn lại (đã xảy ra thật:
+  // "chỉ 2/8 thành viên nhận được thông báo"). Thu lỗi để báo vào tin nhóm quản trị bên dưới.
+  const failedMembers: string[] = [];
+  for (const [memberId, amount] of result.shares) {
+    const member = memberById.get(memberId);
+    if (!member?.statement_chat_id) continue;
+    try {
+      await sendMessage(
+        member.statement_chat_id,
+        `💵 Buổi tập ${dateLabel}\nSố tiền bạn cần thanh toán hôm nay: <b>${amount.toLocaleString("vi-VN")}đ</b>\n(Đã cộng vào sao kê tháng ${result.month})`
+      );
+    } catch (err) {
+      failedMembers.push(member.full_name);
+      console.error(`Gửi thông báo quyết toán thất bại cho ${member.full_name}:`, err);
+    }
+  }
+
   if (settings.admin_group_chat_id) {
     const lines = [`🧮 <b>Đã quyết toán buổi tập ${dateLabel}</b>`, ""];
 
@@ -630,17 +648,11 @@ export async function sendSettlementNotifications(
       lines.push(`- ${memberById.get(memberId)?.full_name ?? "(?)"}: ${amount.toLocaleString("vi-VN")}đ`);
     }
     lines.push("", `Đã cộng vào sao kê tháng ${result.month}.`);
+    if (failedMembers.length > 0) {
+      lines.push("", `⚠️ Gửi thông báo thất bại cho: ${failedMembers.join(", ")} (kiểm tra lại chat riêng).`);
+    }
 
     await sendMessage(settings.admin_group_chat_id, lines.join("\n"));
-  }
-
-  for (const [memberId, amount] of result.shares) {
-    const member = memberById.get(memberId);
-    if (!member?.statement_chat_id) continue;
-    await sendMessage(
-      member.statement_chat_id,
-      `💵 Buổi tập ${dateLabel}\nSố tiền bạn cần thanh toán hôm nay: <b>${amount.toLocaleString("vi-VN")}đ</b>\n(Đã cộng vào sao kê tháng ${result.month})`
-    );
   }
 }
 
@@ -831,6 +843,12 @@ export async function runDueMonthlySettlement(settings: SettingsDocT) {
     costsByMember.get(key)!.push(c);
   }
 
+  // Bọc try/catch quanh mọi lần gửi tin riêng cho thành viên trong hàm này — 1 người gửi lỗi (VD đã
+  // chặn bot, xoá chat riêng) không được phép làm dừng vòng lặp giữa chừng, kẻo bỏ sót các thành
+  // viên còn lại VÀ khiến settings.last_monthly_settlement_run không được lưu ở cuối hàm (job coi
+  // như chưa chạy xong, dễ gửi trùng lần sau). Thu lỗi để báo vào tin nhóm quản trị bên dưới.
+  const failedMembers: string[] = [];
+
   let totalClub = 0;
   let totalAdvanceApplied = 0;
   let totalAdvanceRefund = 0;
@@ -864,24 +882,29 @@ export async function runDueMonthlySettlement(settings: SettingsDocT) {
         );
       }
 
-      await sendMessage(
-        member.statement_chat_id,
-        [
-          `📄 <b>Sao kê tháng ${targetMonth}</b>`,
-          `Số buổi tham gia: ${statement.total_sessions}`,
-          ...(detailLines ? ["", "Chi tiết:", detailLines] : []),
-          ...(advanceLines.length > 0 ? ["", ...advanceLines] : []),
-          "",
-          `Tổng tiền cần đóng: <b>${statement.total_amount.toLocaleString("vi-VN")}đ</b>`,
-        ].join("\n"),
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "Tôi đã thanh toán", callback_data: `paid:${statement._id}` }],
-            ],
-          },
-        }
-      );
+      try {
+        await sendMessage(
+          member.statement_chat_id,
+          [
+            `📄 <b>Sao kê tháng ${targetMonth}</b>`,
+            `Số buổi tham gia: ${statement.total_sessions}`,
+            ...(detailLines ? ["", "Chi tiết:", detailLines] : []),
+            ...(advanceLines.length > 0 ? ["", ...advanceLines] : []),
+            "",
+            `Tổng tiền cần đóng: <b>${statement.total_amount.toLocaleString("vi-VN")}đ</b>`,
+          ].join("\n"),
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "Tôi đã thanh toán", callback_data: `paid:${statement._id}` }],
+              ],
+            },
+          }
+        );
+      } catch (err) {
+        failedMembers.push(member.full_name);
+        console.error(`Gửi sao kê tháng thất bại cho ${member.full_name}:`, err);
+      }
     }
   }
 
@@ -892,10 +915,15 @@ export async function runDueMonthlySettlement(settings: SettingsDocT) {
     const member = await Member.findById(memberId);
     if (!member?.statement_chat_id) continue;
     totalAdvanceRefund += result.refund;
-    await sendMessage(
-      member.statement_chat_id,
-      `📄 <b>Sao kê tháng ${targetMonth}</b>\nKhông có chi phí buổi tập nào tháng này. Khoản chi trước ${result.refund.toLocaleString("vi-VN")}đ sẽ được hoàn lại.`
-    );
+    try {
+      await sendMessage(
+        member.statement_chat_id,
+        `📄 <b>Sao kê tháng ${targetMonth}</b>\nKhông có chi phí buổi tập nào tháng này. Khoản chi trước ${result.refund.toLocaleString("vi-VN")}đ sẽ được hoàn lại.`
+      );
+    } catch (err) {
+      failedMembers.push(member.full_name);
+      console.error(`Gửi hoàn khoản chi trước thất bại cho ${member.full_name}:`, err);
+    }
   }
 
   if (settings.main_group_chat_id && statements.length > 0) {
@@ -910,9 +938,13 @@ export async function runDueMonthlySettlement(settings: SettingsDocT) {
       totalAdvanceApplied > 0 || totalAdvanceRefund > 0
         ? `\nKhoản chi trước: đã trừ ${totalAdvanceApplied.toLocaleString("vi-VN")}đ, cần hoàn ${totalAdvanceRefund.toLocaleString("vi-VN")}đ.`
         : "";
+    const failedSummary =
+      failedMembers.length > 0
+        ? `\n⚠️ Gửi thông báo thất bại cho: ${failedMembers.join(", ")} (kiểm tra lại chat riêng).`
+        : "";
     await sendMessage(
       settings.admin_group_chat_id,
-      `📊 Đã chốt sao kê tháng ${targetMonth}: ${statements.length} thành viên, tổng ${totalClub.toLocaleString("vi-VN")}đ.${advanceSummary}`
+      `📊 Đã chốt sao kê tháng ${targetMonth}: ${statements.length} thành viên, tổng ${totalClub.toLocaleString("vi-VN")}đ.${advanceSummary}${failedSummary}`
     );
   }
 
