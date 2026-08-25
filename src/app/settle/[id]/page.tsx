@@ -59,6 +59,7 @@ export default function SettleSessionPage() {
   const [data, setData] = useState<SettleData | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
+  const [fixedCost, setFixedCost] = useState(0);
   const [saving, setSaving] = useState(false);
   const [settling, setSettling] = useState(false);
   const [error, setError] = useState("");
@@ -72,6 +73,7 @@ export default function SettleSessionPage() {
       .then((d: SettleData) => {
         setData(d);
         setNotFound(false);
+        setFixedCost(d.fixedCost);
         const initial: Record<string, number> = {};
         for (const c of d.costs) {
           if (c.item_id) initial[c.item_id._id] = c.quantity;
@@ -92,7 +94,7 @@ export default function SettleSessionPage() {
     const res = await fetch(`/api/sessions/${id}/costs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items }),
+      body: JSON.stringify({ items, fixed_cost_override: fixedCost }),
     });
     setSaving(false);
     if (!res.ok) {
@@ -174,9 +176,17 @@ export default function SettleSessionPage() {
 
           <div className="rounded-xl border border-zinc-200 bg-white p-4">
             <h3 className="mb-2 text-xs font-semibold text-zinc-700">Chi phí</h3>
-            <p className="mb-2 text-sm text-zinc-600">
-              Chi phí cố định: <b>{data.fixedCost.toLocaleString("vi-VN")}đ</b>
-            </p>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-sm">Chi phí cố định</span>
+              <input
+                type="number"
+                min={0}
+                value={fixedCost}
+                onChange={(e) => setFixedCost(Number(e.target.value))}
+                disabled={!canEditItems}
+                className="w-28 rounded border border-zinc-300 px-2 py-1 text-sm disabled:bg-zinc-100 disabled:text-zinc-400"
+              />
+            </div>
             {data.items.length === 0 ? (
               <p className="text-xs text-zinc-400">Chưa có danh mục vật phẩm.</p>
             ) : (
@@ -199,13 +209,13 @@ export default function SettleSessionPage() {
                 </div>
               ))
             )}
-            {canEditItems && data.items.length > 0 && (
+            {canEditItems && (
               <button
                 onClick={handleSaveItems}
                 disabled={saving}
                 className="mt-2 rounded bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
               >
-                {saving ? "Đang lưu..." : "Lưu vật phẩm"}
+                {saving ? "Đang lưu..." : "Lưu"}
               </button>
             )}
           </div>
