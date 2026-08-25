@@ -37,7 +37,11 @@ export async function askGemini(question: string, contextJson: string | null): P
       body: JSON.stringify({
         system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
         contents: [{ role: "user", parts: [{ text: userContent }] }],
-        generationConfig: { maxOutputTokens: 200 },
+        // gemini-3.6-flash mặc định bật "thinking", tính cả token suy luận vào maxOutputTokens —
+        // nếu để 200 thì model bị cắt ngay giữa lúc suy luận, trả về mỗi phần "thought" dở dang
+        // (VD "**Persona & Constraints:**") thay vì câu trả lời thật. Tắt thinking vì tác vụ chỉ
+        // là hỏi-đáp ngắn, không cần suy luận nhiều bước.
+        generationConfig: { maxOutputTokens: 700, thinkingConfig: { thinkingBudget: 0 } },
       }),
     }
   );
@@ -47,7 +51,15 @@ export async function askGemini(question: string, contextJson: string | null): P
     throw new Error(`Gemini API error: ${data?.error?.message ?? res.statusText}`);
   }
 
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text as string | undefined;
+  const parts = data?.candidates?.[0]?.content?.parts as
+    | Array<{ text?: string; thought?: boolean }>
+    | undefined;
+  // Phòng hờ model vẫn trả kèm phần "thought" dù đã tắt thinkingBudget — chỉ lấy phần text thật.
+  const text = parts
+    ?.filter((p) => !p.thought && p.text)
+    .map((p) => p.text)
+    .join("")
+    .trim();
   if (!text) throw new Error("Gemini API trả về response không có nội dung");
 
   const trimmed = text.trim();
