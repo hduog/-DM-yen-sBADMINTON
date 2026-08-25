@@ -39,9 +39,10 @@ export async function askGemini(question: string, contextJson: string | null): P
         contents: [{ role: "user", parts: [{ text: userContent }] }],
         // gemini-3.6-flash mặc định bật "thinking", tính cả token suy luận vào maxOutputTokens —
         // nếu để 200 thì model bị cắt ngay giữa lúc suy luận, trả về mỗi phần "thought" dở dang
-        // (VD "**Persona & Constraints:**") thay vì câu trả lời thật. Tắt thinking vì tác vụ chỉ
-        // là hỏi-đáp ngắn, không cần suy luận nhiều bước.
-        generationConfig: { maxOutputTokens: 700, thinkingConfig: { thinkingBudget: 0 } },
+        // (VD "**Persona & Constraints:**") thay vì câu trả lời thật. Model này không cho set
+        // thinkingBudget: 0 (trả lỗi "invalid argument"), nên chỉ tăng maxOutputTokens cho đủ chỗ
+        // vừa suy luận vừa trả lời, và lọc bỏ phần "thought" ở dưới khi đọc response.
+        generationConfig: { maxOutputTokens: 1024 },
       }),
     }
   );
