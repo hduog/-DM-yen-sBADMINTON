@@ -46,6 +46,7 @@ const HELP_TEXT = [
   "/huy - Hủy toàn bộ đăng ký của bạn (cả tham gia lẫn khách)",
   "/nhac - Nhắc những ai chưa điểm danh",
   "/thongke - Thống kê điểm danh theo tháng",
+  "/botoi &lt;câu hỏi&gt; - Hỏi trợ lý ảo về điểm danh/buổi tập, chấn thương, hồi phục",
   "/help - Hướng dẫn cách dùng các lệnh",
 ].join("\n");
 
@@ -53,29 +54,51 @@ export async function POST(request: NextRequest) {
   const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
   const receivedSecret = request.headers.get("x-telegram-bot-api-secret-token");
   if (expectedSecret && receivedSecret !== expectedSecret) {
+    console.warn("[telegram-webhook] invalid secret token from request");
     return NextResponse.json({ error: "Invalid secret token" }, { status: 401 });
   }
 
-  const update = (await request.json().catch(() => null)) as TelegramUpdate | null;
+  const update = (await request.json().catch((err) => {
+    console.error("[telegram-webhook] failed to parse request JSON:", err);
+    return null;
+  })) as TelegramUpdate | null;
   if (!update) return NextResponse.json({ ok: true });
 
-  await connectDB();
+  console.log(
+    "[telegram-webhook] update received:",
+    JSON.stringify({
+      chat_id: update.message?.chat.id ?? update.callback_query?.message?.chat.id,
+      from_id: update.message?.from?.id ?? update.callback_query?.from.id,
+      text: update.message?.text,
+      callback_data: update.callback_query?.data,
+    })
+  );
 
-  if (update.message) await handleMessage(update.message);
-  if (update.callback_query) await handleCallbackQuery(update.callback_query);
+  try {
+    await connectDB();
+
+    if (update.message) await handleMessage(update.message);
+    if (update.callback_query) await handleCallbackQuery(update.callback_query);
+  } catch (err) {
+    console.error("[telegram-webhook] unhandled error while processing update:", err);
+  }
 
   return NextResponse.json({ ok: true });
 }
 
 async function handleMessage(message: TelegramMessage) {
   const rawText = message.text?.trim();
-  if (!rawText) return;
+  if (!rawText) {
+    console.log("[telegram-webhook] message has no text, skip");
+    return;
+  }
 
   // Telegram gửi kèm "@bot_username" khi lệnh được gõ trong group (VD "/thamgia@YenCLBBot") — bỏ
   // phần đó trước khi so khớp lệnh.
   const [rawCommand, ...rest] = rawText.split(/\s+/);
   const command = rawCommand.split("@")[0].toLowerCase();
   const argsText = rest.join(" ").trim();
+  console.log(`[telegram-webhook] parsed command="${command}" argsText="${argsText}"`);
 
   switch (command) {
     case "/start":
@@ -118,40 +141,42 @@ async function handleMessage(message: TelegramMessage) {
     case "/thongke":
       await handleThongKe(message);
       return;
+    case "/botoi":
+      await handleBotOi(message, argsText);
+      return;
     default:
-      await handlePossibleBotMention(message, rawText);
       return;
   }
 }
 
-// Không phải "/lệnh" hợp lệ nào — kiểm tra xem có phải bot bị @mention kèm câu hỏi hay không (mention
-// có thể nằm bất kỳ đâu trong câu, không chỉ ở đầu, khác với việc strip "@bot_username" ở cuối 1
-// lệnh "/thamgia@Bot"). Mention trần không kèm nội dung gì thì bỏ qua, giữ nguyên hành vi im lặng.
-// Áp dụng cho MỌI chat bot có mặt (không giới hạn nhóm chính, không yêu cầu người hỏi là Member).
-async function handlePossibleBotMention(message: TelegramMessage, rawText: string) {
-  const settings = await getSettings();
-  const botUsername = settings.bot_username;
-  if (!botUsername) return;
+// Lệnh hỏi-đáp với trợ lý ảo Gemini — dùng lệnh "/botoi" thay vì @mention vì Telegram Privacy Mode
+// (đang bật trên bot) chỉ forward cho webhook: lệnh, reply vào tin của bot, hoặc /start nếu bot vừa
+// gửi tin gần nhất — KHÔNG forward mention trần, nên cơ chế mention không bao giờ tới được server
+// (đã xác nhận qua getWebhookInfo: pending_update_count=0, không có last_error). Áp dụng cho MỌI
+// chat bot có mặt (không giới hạn nhóm chính, không yêu cầu người hỏi là Member).
+async function handleBotOi(message: TelegramMessage, question: string) {
+  if (!question) {
+    await sendMessage(
+      message.chat.id,
+      "Vui lòng nhập câu hỏi, ví dụ: /botoi Buổi tập hôm nay có bao nhiêu người tham gia?"
+    );
+    return;
+  }
 
-  const escaped = botUsername.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const mentionRegex = new RegExp(`@${escaped}\\b`, "i");
-  if (!mentionRegex.test(rawText)) return;
-
-  const question = rawText.replace(mentionRegex, "").trim();
-  if (!question) return;
-
-  await handleBotMentionQuestion(message, question);
-}
-
-async function handleBotMentionQuestion(message: TelegramMessage, question: string) {
   try {
+    console.log(`[telegram-webhook] building attendance context for question="${question}"`);
     const contextJson = await buildAttendanceContext();
+    console.log(
+      `[telegram-webhook] context built, length=${contextJson?.length ?? 0}, calling Gemini...`
+    );
     const answer = await askGemini(question, contextJson);
+    console.log(`[telegram-webhook] Gemini answered (${answer.length} chars): "${answer}"`);
     await sendMessage(message.chat.id, answer);
+    console.log(`[telegram-webhook] sent answer to chat_id=${message.chat.id}`);
   } catch (err) {
-    console.error("Gemini mention handler failed:", err);
+    console.error("[telegram-webhook] Gemini mention handler failed:", err);
     await sendMessage(message.chat.id, "Xin lỗi, em đang bị ốm, lát nữa em trả lời cho anh chị nha ^^").catch(
-      () => {}
+      (sendErr) => console.error("[telegram-webhook] failed to send fallback message:", sendErr)
     );
   }
 }

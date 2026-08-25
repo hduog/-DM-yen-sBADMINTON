@@ -1,5 +1,7 @@
 const API_KEY = process.env.GEMINI_API_KEY;
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+// gemini-2.0-flash đã bị Google khai tử (API trả 404 kèm gợi ý model thay thế) — dùng
+// gemini-3.6-flash làm mặc định, vẫn đổi được qua GEMINI_MODEL mà không cần sửa code.
+const MODEL = process.env.GEMINI_MODEL || "gemini-3.6-flash";
 
 const SYSTEM_PROMPT = [
   'Em là trợ lý ảo thân thiện, dễ thương của câu lạc bộ, xưng "em", gọi người hỏi là "anh/chị".',
