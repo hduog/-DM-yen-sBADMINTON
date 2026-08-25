@@ -3,6 +3,8 @@ import { connectDB } from "@/lib/mongodb";
 import { Attendance, Member, MonthlyStatement, SessionGuest } from "@/lib/models";
 import { answerCallbackQuery, sendMessage } from "@/lib/telegram";
 import { getSettings } from "@/lib/models/Settings";
+import { buildAttendanceContext } from "@/lib/attendance-context";
+import { askGemini } from "@/lib/gemini";
 import {
   announceAttendanceChange,
   assertGuestEditable,
@@ -117,7 +119,40 @@ async function handleMessage(message: TelegramMessage) {
       await handleThongKe(message);
       return;
     default:
+      await handlePossibleBotMention(message, rawText);
       return;
+  }
+}
+
+// Không phải "/lệnh" hợp lệ nào — kiểm tra xem có phải bot bị @mention kèm câu hỏi hay không (mention
+// có thể nằm bất kỳ đâu trong câu, không chỉ ở đầu, khác với việc strip "@bot_username" ở cuối 1
+// lệnh "/thamgia@Bot"). Mention trần không kèm nội dung gì thì bỏ qua, giữ nguyên hành vi im lặng.
+// Áp dụng cho MỌI chat bot có mặt (không giới hạn nhóm chính, không yêu cầu người hỏi là Member).
+async function handlePossibleBotMention(message: TelegramMessage, rawText: string) {
+  const settings = await getSettings();
+  const botUsername = settings.bot_username;
+  if (!botUsername) return;
+
+  const escaped = botUsername.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const mentionRegex = new RegExp(`@${escaped}\\b`, "i");
+  if (!mentionRegex.test(rawText)) return;
+
+  const question = rawText.replace(mentionRegex, "").trim();
+  if (!question) return;
+
+  await handleBotMentionQuestion(message, question);
+}
+
+async function handleBotMentionQuestion(message: TelegramMessage, question: string) {
+  try {
+    const contextJson = await buildAttendanceContext();
+    const answer = await askGemini(question, contextJson);
+    await sendMessage(message.chat.id, answer);
+  } catch (err) {
+    console.error("Gemini mention handler failed:", err);
+    await sendMessage(message.chat.id, "Xin lỗi, em đang bị ốm, lát nữa em trả lời cho anh chị nha ^^").catch(
+      () => {}
+    );
   }
 }
 
