@@ -31,6 +31,28 @@ export function sendMessage(
   });
 }
 
+// Gửi file (VD CSV sao kê) — phải dùng multipart/form-data nên không đi qua callApi (JSON).
+export async function sendDocument(
+  chatId: number | string,
+  content: string,
+  fileName: string,
+  caption?: string
+) {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("document", new Blob([content], { type: "text/csv" }), fileName);
+  if (caption) {
+    form.append("caption", caption);
+    form.append("parse_mode", "HTML");
+  }
+  const res = await fetch(apiUrl("sendDocument"), { method: "POST", body: form });
+  const data = await res.json();
+  if (!data.ok) {
+    throw new Error(`Telegram API sendDocument failed: ${data.description ?? res.statusText}`);
+  }
+  return data.result as { message_id: number };
+}
+
 export function answerCallbackQuery(
   callbackQueryId: string,
   options: Record<string, unknown> = {}

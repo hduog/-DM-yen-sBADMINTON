@@ -2,13 +2,18 @@ import { NextResponse, type NextRequest } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import { Session } from "@/lib/models";
 import { requireAdmin } from "@/lib/auth-guard";
+import { vnNow } from "@/lib/session-actions";
 
 export async function GET() {
   const admin = await requireAdmin();
   if (!admin) return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
 
   await connectDB();
-  const sessions = await Session.find().sort({ date: 1, start_time: 1 }).limit(50);
+  // Chỉ lấy từ 3 tháng trước (giờ VN) trở đi — đủ cho các tab Sắp tới / Đã quyết toán / Pass-Hủy
+  // sân. Trước đây sort tăng dần + limit(50) nên khi dữ liệu > 50 buổi sẽ mất các buổi mới nhất.
+  const today = vnNow();
+  const from = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 3, today.getUTCDate()));
+  const sessions = await Session.find({ date: { $gte: from } }).sort({ date: 1, start_time: 1 });
   return NextResponse.json(sessions);
 }
 

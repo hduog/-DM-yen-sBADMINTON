@@ -150,7 +150,7 @@ export default function SettleSessionPage() {
 
       {isCancelled ? (
         <p className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-500">
-          Buổi tập này đã bị huỷ — chi phí cố định đã được tự động chia đều cho tất cả thành viên khi huỷ.
+          Buổi tập này đã bị huỷ — chi phí cố định đã được tự động chia đều cho các admin (BTC) khi huỷ.
         </p>
       ) : isPassCourt ? (
         <p className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-500">

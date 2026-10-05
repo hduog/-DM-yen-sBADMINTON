@@ -3,7 +3,12 @@ import { connectDB } from "@/lib/mongodb";
 import { ItemConfig, Member, Session, SessionCost, SessionGuest, SessionMemberCost } from "@/lib/models";
 import { getSettings } from "@/lib/models/Settings";
 import { requireAdmin } from "@/lib/auth-guard";
-import { getEffectiveFixedCost, getSessionAttendanceDetail, getSessionCostUnits } from "@/lib/session-actions";
+import {
+  getCancelledSessionPayers,
+  getEffectiveFixedCost,
+  getSessionAttendanceDetail,
+  getSessionCostUnits,
+} from "@/lib/session-actions";
 
 // Dùng bởi trang /settle/[id] (mở qua link nhắc quyết toán trong nhóm quản trị — xem
 // sendDueSettlementReminders). Chỉ đọc dữ liệu; sửa vật phẩm vẫn đi qua /api/sessions/[id]/costs
@@ -55,10 +60,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     totalUnits = shares.reduce((sum, s) => sum + s.units, 0);
   } else if (session.status === "cancelled") {
     total = fixedCost;
-    const activeMembers = await Member.find({ status: "active", del_flag: { $ne: true } }).sort({ full_name: 1 });
-    totalUnits = activeMembers.length;
+    const payers = await getCancelledSessionPayers();
+    totalUnits = payers.length;
     const perUnit = totalUnits > 0 ? total / totalUnits : 0;
-    shares = activeMembers.map((m) => ({
+    shares = payers.map((m) => ({
       member_id: m._id.toString(),
       full_name: m.full_name,
       units: 1,

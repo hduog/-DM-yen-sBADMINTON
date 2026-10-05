@@ -517,6 +517,12 @@ export function getEffectiveFixedCost(
   return session.fixed_cost_override ?? settings.fixed_cost_per_session ?? 0;
 }
 
+// Người gánh chi phí cố định khi buổi tập bị huỷ (không pass được sân) — chia đều cho các admin
+// (BTC) đang active, theo kết quả vote của CLB. Dùng chung cho settleSessionCost và preview /settle.
+export async function getCancelledSessionPayers() {
+  return Member.find({ role: "admin", status: "active", del_flag: { $ne: true } }).sort({ full_name: 1 });
+}
+
 // Phân bổ chi phí 1 buổi tập vào MonthlyStatement — dùng chung cho nút "Quyết toán", tự động khi
 // huỷ buổi, và cron dọn nốt buổi bị bỏ sót cuối tháng (runDueMonthlySettlement). Idempotent qua
 // cost_settled_at: gọi lại trên buổi đã settle sẽ no-op (trả về null) để tránh cộng dồn 2 lần.
@@ -528,10 +534,10 @@ export async function settleSessionCost(session: SessionDocT, settings: Settings
 
   if (session.status === "cancelled") {
     // Buổi huỷ: không ai điểm danh được, chỉ tính chi phí cố định (VD tiền sân đã cọc không hoàn),
-    // chia đều cho TẤT CẢ thành viên active thay vì theo suất có mặt.
+    // chia đều cho các admin (xem getCancelledSessionPayers) thay vì theo suất có mặt.
     total = getEffectiveFixedCost(session, settings);
-    const activeMembers = await Member.find({ status: "active", del_flag: { $ne: true } });
-    unitsByMember = new Map(activeMembers.map((m) => [m._id.toString(), 1]));
+    const payers = await getCancelledSessionPayers();
+    unitsByMember = new Map(payers.map((m) => [m._id.toString(), 1]));
   } else {
     const costs = await SessionCost.find({ session_id: session._id });
     total = costs.reduce((sum, c) => sum + c.total_amount, 0) + getEffectiveFixedCost(session, settings);
@@ -789,11 +795,11 @@ export async function runDueMonthlySettlement(settings: SettingsDocT) {
 
   const statements = await MonthlyStatement.find({ month: targetMonth, total_amount: { $gt: 0 } });
 
-  // Áp dụng khoản chi trước (MemberAdvance) còn mở, phát sinh từ targetMonth trở về trước (bắt cả
-  // khoản bị bỏ sót ở chu kỳ trước) — mỗi khoản chỉ áp dụng đúng 1 lần: trừ vào total_amount của
-  // sao kê tháng này (nếu có), phần dư (chi trước nhiều hơn chi phí thực tế) đánh dấu refund_amount
-  // để báo hoàn lại thành viên thay vì tự động cộng dồn sang tháng sau.
-  const dueAdvances = await MemberAdvance.find({ status: "open", month: { $lte: targetMonth } });
+  // Áp dụng khoản chi trước (MemberAdvance) còn mở, phát sinh ĐÚNG trong targetMonth — khoản của
+  // tháng khác không liên quan tới sao kê tháng này (theo yêu cầu CLB). Mỗi khoản chỉ áp dụng đúng
+  // 1 lần: trừ vào total_amount của sao kê tháng này (nếu có), phần dư (chi trước nhiều hơn chi phí
+  // thực tế) đánh dấu refund_amount để báo hoàn lại thành viên thay vì tự động cộng dồn sang tháng sau.
+  const dueAdvances = await MemberAdvance.find({ status: "open", month: targetMonth });
   const statementByMember = new Map(statements.map((s) => [s.member_id.toString(), s]));
   const advanceResultByMember = new Map<string, { applied: number; refund: number }>();
 

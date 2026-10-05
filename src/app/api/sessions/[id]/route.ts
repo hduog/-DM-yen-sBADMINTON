@@ -59,7 +59,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     const dateLabel = `${formatVNDate(session.date)} (${session.start_time}-${session.end_time})`;
     const feeNote =
       result && result.total > 0
-        ? ` Chi phí cố định ${result.total.toLocaleString("vi-VN")}đ đã được chia đều vào sao kê các thành viên.`
+        ? ` Chi phí cố định ${result.total.toLocaleString("vi-VN")}đ đã được chia đều vào sao kê các admin (BTC).`
         : "";
     const text = `🚫 Buổi tập ${dateLabel} đã bị huỷ.${feeNote}`;
     if (settings.main_group_chat_id) await sendMessage(settings.main_group_chat_id, text);

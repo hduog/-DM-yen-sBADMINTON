@@ -17,6 +17,14 @@ type SessionItem = {
   pass_court_at?: string;
 };
 
+type Tab = "upcoming" | "settled" | "pass_cancelled";
+
+const TABS: { key: Tab; label: string; empty: string }[] = [
+  { key: "upcoming", label: "Sắp tới", empty: "Không có buổi tập nào sắp tới." },
+  { key: "settled", label: "Đã quyết toán", empty: "Chưa có buổi tập nào đã quyết toán." },
+  { key: "pass_cancelled", label: "Pass/Hủy sân", empty: "Không có buổi pass/hủy sân nào trong 3 tháng gần nhất." },
+];
+
 const VN_OFFSET_MS = 7 * 60 * 60 * 1000;
 const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
 
@@ -66,7 +74,7 @@ export default function AttendancePage() {
   const [resettingId, setResettingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const [activeTab, setActiveTab] = useState<"upcoming" | "settled">("upcoming");
+  const [activeTab, setActiveTab] = useState<Tab>("upcoming");
 
   function load() {
     fetch("/api/sessions")
@@ -130,8 +138,16 @@ export default function AttendancePage() {
     load();
   }
 
-  const filteredSessions =
-    sessions?.filter((s) => (activeTab === "settled" ? !!s.cost_settled_at : !s.cost_settled_at)) ?? [];
+  // Buổi pass sân/huỷ tách riêng sang tab "Pass/Hủy sân" (mới nhất trước) để không lẫn vào 2 tab
+  // còn lại — buổi huỷ vốn tự quyết toán nên trước đây nằm ở "Đã quyết toán", buổi pass sân thì
+  // không bao giờ quyết toán nên nằm mãi ở "Sắp tới". API đã giới hạn dữ liệu trong 3 tháng gần nhất.
+  const filteredSessions = (sessions ?? []).filter((s) => {
+    const passOrCancelled = s.status === "cancelled" || !!s.pass_court_at;
+    if (activeTab === "pass_cancelled") return passOrCancelled;
+    if (passOrCancelled) return false;
+    return activeTab === "settled" ? !!s.cost_settled_at : !s.cost_settled_at;
+  });
+  if (activeTab === "pass_cancelled") filteredSessions.reverse();
 
   return (
     <div className="flex flex-col gap-4">
@@ -186,32 +202,24 @@ export default function AttendancePage() {
       </div>
 
       <div className="flex rounded-xl border border-zinc-200 bg-white p-1">
-        <button
-          type="button"
-          onClick={() => setActiveTab("upcoming")}
-          className={`flex-1 rounded-lg py-2 text-sm font-medium transition ${
-            activeTab === "upcoming" ? "bg-zinc-900 text-white" : "text-zinc-500 hover:text-zinc-700"
-          }`}
-        >
-          Sắp tới
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("settled")}
-          className={`flex-1 rounded-lg py-2 text-sm font-medium transition ${
-            activeTab === "settled" ? "bg-zinc-900 text-white" : "text-zinc-500 hover:text-zinc-700"
-          }`}
-        >
-          Đã quyết toán
-        </button>
+        {TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setActiveTab(tab.key)}
+            className={`flex-1 rounded-lg py-2 text-sm font-medium transition ${
+              activeTab === tab.key ? "bg-zinc-900 text-white" : "text-zinc-500 hover:text-zinc-700"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       <div className="flex flex-col gap-3">
         {sessions === null && <p className="text-sm text-zinc-400">Đang tải...</p>}
         {sessions !== null && filteredSessions.length === 0 && (
-          <p className="text-sm text-zinc-400">
-            {activeTab === "upcoming" ? "Không có buổi tập nào sắp tới." : "Chưa có buổi tập nào đã quyết toán."}
-          </p>
+          <p className="text-sm text-zinc-400">{TABS.find((t) => t.key === activeTab)!.empty}</p>
         )}
         {filteredSessions.map((s) => {
           const isLocked = s.status === "cancelled" || !!s.cost_settled_at || !!s.pass_court_at;

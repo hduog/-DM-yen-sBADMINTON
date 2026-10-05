@@ -45,6 +45,8 @@ export default function StatementsPage() {
   const [sessionStatements, setSessionStatements] = useState<SessionStatement[] | null>(null);
   const [members, setMembers] = useState<MemberOption[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
 
   const [memberId, setMemberId] = useState("");
   const [month, setMonth] = useState("");
@@ -83,6 +85,29 @@ export default function StatementsPage() {
     await fetch(`/api/statements/${id}/approve`, { method: "POST" });
     setBusyId(null);
     load();
+  }
+
+  // Xuất CSV cho tháng đang lọc (chưa chọn thì lấy tháng hiện tại). Trong Telegram Mini App webview
+  // thường chặn tải file nên nhờ bot gửi file vào chat riêng; ngoài trình duyệt thì tải thẳng.
+  async function handleExport() {
+    const now = currentVNYearMonth();
+    const params = new URLSearchParams({ month: month || String(now.month), year: year || String(now.year) });
+    const url = `/api/statements/export?${params.toString()}`;
+
+    if (!window.Telegram?.WebApp?.initData) {
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "";
+      link.click();
+      return;
+    }
+
+    setExporting(true);
+    setExportMessage(null);
+    const res = await fetch(url, { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    setExporting(false);
+    setExportMessage(res.ok ? "✅ Bot đã gửi file CSV vào chat riêng của bạn." : data.error ?? "Xuất file thất bại");
   }
 
   const { year: thisYear } = currentVNYearMonth();
@@ -148,6 +173,14 @@ export default function StatementsPage() {
             </option>
           ))}
         </select>
+        <button
+          onClick={handleExport}
+          disabled={exporting}
+          className="ml-auto rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40"
+        >
+          {exporting ? "Đang xuất..." : "📥 Xuất Excel/CSV"}
+        </button>
+        {exportMessage && <p className="w-full text-xs text-zinc-500">{exportMessage}</p>}
       </div>
 
       {view === "month" ? (
