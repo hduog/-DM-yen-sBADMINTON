@@ -4,16 +4,30 @@ import { Session } from "@/lib/models";
 import { requireAdmin } from "@/lib/auth-guard";
 import { vnNow } from "@/lib/session-actions";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const admin = await requireAdmin();
   if (!admin) return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
 
+  // Lọc theo tháng (?month=YYYY-MM, mặc định tháng hiện tại giờ VN) để tránh tải quá nhiều buổi.
+  // Sắp xếp ngày mới nhất trước.
+  const monthParam = request.nextUrl.searchParams.get("month");
+  let year: number;
+  let month: number; // 0-based
+  const match = monthParam?.match(/^(\d{4})-(\d{2})$/);
+  if (match) {
+    year = Number(match[1]);
+    month = Number(match[2]) - 1;
+    if (month < 0 || month > 11) return NextResponse.json({ error: "Tháng không hợp lệ" }, { status: 400 });
+  } else {
+    const today = vnNow();
+    year = today.getUTCFullYear();
+    month = today.getUTCMonth();
+  }
+  const from = new Date(Date.UTC(year, month, 1));
+  const to = new Date(Date.UTC(year, month + 1, 1));
+
   await connectDB();
-  // Chỉ lấy từ 3 tháng trước (giờ VN) trở đi — đủ cho các tab Sắp tới / Đã quyết toán / Pass-Hủy
-  // sân. Trước đây sort tăng dần + limit(50) nên khi dữ liệu > 50 buổi sẽ mất các buổi mới nhất.
-  const today = vnNow();
-  const from = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 3, today.getUTCDate()));
-  const sessions = await Session.find({ date: { $gte: from } }).sort({ date: 1, start_time: 1 });
+  const sessions = await Session.find({ date: { $gte: from, $lt: to } }).sort({ date: -1, start_time: -1 });
   return NextResponse.json(sessions);
 }
 

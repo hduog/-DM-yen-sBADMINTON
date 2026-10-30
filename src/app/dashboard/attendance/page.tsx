@@ -22,10 +22,14 @@ type Tab = "upcoming" | "settled" | "pass_cancelled";
 const TABS: { key: Tab; label: string; empty: string }[] = [
   { key: "upcoming", label: "Sắp tới", empty: "Không có buổi tập nào sắp tới." },
   { key: "settled", label: "Đã quyết toán", empty: "Chưa có buổi tập nào đã quyết toán." },
-  { key: "pass_cancelled", label: "Pass/Hủy sân", empty: "Không có buổi pass/hủy sân nào trong 3 tháng gần nhất." },
+  { key: "pass_cancelled", label: "Pass/Hủy sân", empty: "Không có buổi pass/hủy sân nào." },
 ];
 
 const VN_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+function currentVNMonth(): string {
+  return new Date(Date.now() + VN_OFFSET_MS).toISOString().slice(0, 7);
+}
 const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
 
 function combineVNDateTime(dateStr: string, hhmm: string): Date {
@@ -75,14 +79,15 @@ export default function AttendancePage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("upcoming");
+  const [month, setMonth] = useState(currentVNMonth);
 
   function load() {
-    fetch("/api/sessions")
+    fetch(`/api/sessions?month=${month}`)
       .then((r) => r.json())
       .then(setSessions);
   }
 
-  useEffect(load, []);
+  useEffect(load, [month]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -138,16 +143,15 @@ export default function AttendancePage() {
     load();
   }
 
-  // Buổi pass sân/huỷ tách riêng sang tab "Pass/Hủy sân" (mới nhất trước) để không lẫn vào 2 tab
-  // còn lại — buổi huỷ vốn tự quyết toán nên trước đây nằm ở "Đã quyết toán", buổi pass sân thì
-  // không bao giờ quyết toán nên nằm mãi ở "Sắp tới". API đã giới hạn dữ liệu trong 3 tháng gần nhất.
+  // Buổi pass sân/huỷ tách riêng sang tab "Pass/Hủy sân" để không lẫn vào 2 tab còn lại — buổi huỷ
+  // vốn tự quyết toán nên trước đây nằm ở "Đã quyết toán", buổi pass sân thì không bao giờ quyết
+  // toán nên nằm mãi ở "Sắp tới". API đã lọc theo tháng đang chọn và sắp xếp ngày mới nhất trước.
   const filteredSessions = (sessions ?? []).filter((s) => {
     const passOrCancelled = s.status === "cancelled" || !!s.pass_court_at;
     if (activeTab === "pass_cancelled") return passOrCancelled;
     if (passOrCancelled) return false;
     return activeTab === "settled" ? !!s.cost_settled_at : !s.cost_settled_at;
   });
-  if (activeTab === "pass_cancelled") filteredSessions.reverse();
 
   return (
     <div className="flex flex-col gap-4">
@@ -199,6 +203,20 @@ export default function AttendancePage() {
             </button>
           </form>
         )}
+      </div>
+
+      <div className="flex items-center justify-between gap-2 rounded-xl border border-zinc-200 bg-white px-4 py-2">
+        <span className="text-sm font-semibold text-zinc-700">Tháng</span>
+        <input
+          type="month"
+          value={month}
+          onChange={(e) => {
+            if (!e.target.value) return;
+            setSessions(null);
+            setMonth(e.target.value);
+          }}
+          className="rounded border border-zinc-300 px-2 py-1 text-sm"
+        />
       </div>
 
       <div className="flex rounded-xl border border-zinc-200 bg-white p-1">
@@ -672,9 +690,8 @@ function CostForm({ sessionId, disabled }: { sessionId: string; disabled?: boole
 
   async function handleSave() {
     setSaving(true);
-    const items = Object.entries(quantities)
-      .filter(([, qty]) => qty > 0)
-      .map(([item_id, quantity]) => ({ item_id, quantity }));
+    // Gửi cả số lượng 0 để server xoá vật phẩm đã nhập trước đó.
+    const items = Object.entries(quantities).map(([item_id, quantity]) => ({ item_id, quantity: quantity || 0 }));
     const res = await fetch(`/api/sessions/${sessionId}/costs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

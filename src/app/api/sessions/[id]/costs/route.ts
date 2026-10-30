@@ -71,7 +71,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   let total = getEffectiveFixedCost(session, settings);
   for (const entry of body.items as { item_id: string; quantity: number }[]) {
     const item = await ItemConfig.findById(entry.item_id);
-    if (!item || !entry.quantity) continue;
+    if (!item) continue;
+    // Số lượng 0 nghĩa là bỏ vật phẩm khỏi buổi tập → xoá bản ghi cũ thay vì bỏ qua (trước đây
+    // bỏ qua nên không sửa được từ 1 về 0).
+    if (!entry.quantity || entry.quantity <= 0) {
+      await SessionCost.deleteOne({ session_id: id, item_id: entry.item_id });
+      continue;
+    }
 
     const total_amount = item.unit_price * entry.quantity;
     total += total_amount;
